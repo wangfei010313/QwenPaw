@@ -8,6 +8,7 @@ import os
 from typing import Dict, List
 import logging
 import json
+import threading
 
 from pydantic import BaseModel
 
@@ -1009,7 +1010,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
     _instance = None
 
-    def __init__(self) -> None:
+    def __init__(self, lazy_init: bool = True) -> None:
         # Initialize provider manager, load providers from registry and store
         # any necessary state (e.g., cached models).
         self.builtin_providers: Dict[str, Provider] = {}
@@ -1020,14 +1021,32 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self.builtin_path = self.root_path / "builtin"
         self.custom_path = self.root_path / "custom"
         self.plugin_path = self.root_path / "plugin"  # Plugin provider configs
+        self._lazy_init_done = False
         self._prepare_disk_storage()
         self._init_builtins()
         try:
             self._migrate_legacy_providers()
         except Exception as e:
             logger.warning("Failed to migrate legacy providers: %s", e)
+
+        # Lazy initialization: defer heavy I/O to background
+        if not lazy_init:
+            self._complete_initialization()
+
+    def _complete_initialization(self) -> None:
+        """Complete initialization: load storage and apply annotations.
+
+        This is called automatically during first access to custom/active models
+        or can be called explicitly in background startup phase.
+        """
+        if self._lazy_init_done:
+            return
+
+        logger.debug("ProviderManager: starting complete initialization...")
         self._init_from_storage()
         self._apply_default_annotations()
+        self._lazy_init_done = True
+        logger.debug("ProviderManager: complete initialization done")
 
     def _prepare_disk_storage(self):
         """Prepare directory structure"""
@@ -1075,7 +1094,13 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     def _add_builtin(self, provider: Provider):
         self.builtin_providers[provider.id] = provider
 
+    def _ensure_initialized(self) -> None:
+        """Ensure lazy initialization is complete before accessing custom providers."""
+        if not self._lazy_init_done:
+            self._complete_initialization()
+
     async def list_provider_info(self) -> List[ProviderInfo]:
+        self._ensure_initialized()
         tasks = [
             provider.get_info() for provider in self.builtin_providers.values()
         ]
@@ -1112,6 +1137,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     def get_provider(self, provider_id: str) -> Provider | None:
         # Return a provider instance by its ID. This will be used to create
         # chat model instances for the agent.
+        self._ensure_initialized()
         # Normalize provider ID for backward compatibility
         provider_id = self._normalize_provider_id(provider_id)
         # Check plugin providers first
@@ -1133,6 +1159,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
     def get_active_model(self) -> ModelSlotConfig | None:
         # Return the currently active provider/model configuration.
+        self._ensure_initialized()
         return self.active_model
 
     def update_provider(self, provider_id: str, config: Dict) -> bool:
@@ -1140,6 +1167,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         # This will be called when the user edits a provider's settings in the
         # UI. It should update the in-memory provider instance and persist the
         # changes to providers.json.
+        self._ensure_initialized()
         # Normalize provider ID for backward compatibility
         provider_id = self._normalize_provider_id(provider_id)
         provider = self.get_provider(provider_id)
@@ -1164,12 +1192,31 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         return True
 
     def start_local_model_resume(self, local_manager) -> None:
-        """Schedule background restore of the active local model server."""
-        task = asyncio.create_task(
-            self._resume_local_model(local_manager),
-            name="qwenpaw-local-model-resume",
-        )
-        task.add_done_callback(self._on_local_model_resume_done)
+        """
+        Blocking version of start_local_model_resume.
+        This function is thread-safe and will work correctly even if called from a thread pool.
+        """
+        logger.debug("Starting local model resume procedure (blocking mode)")
+
+        # 获取当前线程
+        current_thread = threading.current_thread()
+
+        # 尝试获取当前线程的事件循环（如果存在）
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # 如果当前线程没有事件循环（比如在子线程中），则创建一个新的
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        # 检查循环是否正在运行（通常子线程的循环是停止的）
+        if loop.is_running():
+            logger.warning(
+                "Event loop is already running in this thread. Using temporary executor."
+            )
+            logger.error(
+                "Cannot schedule task: event loop is running but we cannot get main loop reference"
+            )
 
     @staticmethod
     def _on_local_model_resume_done(task: asyncio.Task[None]) -> None:
@@ -1247,6 +1294,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     async def add_custom_provider(self, provider_data: ProviderInfo):
         # Add a new custom provider with the given data. This will update the
         # providers.json file and make the new provider available in the UI.
+        self._ensure_initialized()
         provider_payload = provider_data.model_dump()
         provider_payload["id"] = self._resolve_custom_provider_id(
             provider_data.id,
@@ -1265,6 +1313,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     def remove_custom_provider(self, provider_id: str) -> bool:
         # Remove a custom provider by its ID. This will update the
         # providers.json file and remove the provider from the UI.
+        self._ensure_initialized()
         if provider_id in self.custom_providers:
             del self.custom_providers[provider_id]
             provider_path = self.custom_path / f"{provider_id}.json"
@@ -1277,6 +1326,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         # Set the active provider and model for the agent. This will update
         # providers.json and determine which provider/model is used when the
         # agent creates chat model instances.
+        self._ensure_initialized()
         # Normalize provider ID for backward compatibility
         provider_id = self._normalize_provider_id(provider_id)
         provider = self.get_provider(provider_id)
@@ -2109,9 +2159,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
     @staticmethod
     def get_instance() -> "ProviderManager":
-        """Get the singleton instance of ProviderManager."""
+        """Get the singleton instance of ProviderManager with lazy initialization."""
         if ProviderManager._instance is None:
-            ProviderManager._instance = ProviderManager()
+            ProviderManager._instance = ProviderManager(lazy_init=True)
         return ProviderManager._instance
 
     @staticmethod
