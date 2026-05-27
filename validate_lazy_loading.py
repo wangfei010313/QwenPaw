@@ -2,10 +2,13 @@
 # -*- coding: utf-8 -*-
 """Comprehensive validation script for lazy loading optimization."""
 
+# pylint: disable=protected-access
+
 import sys
 import time
 import logging
-from pathlib import Path
+from qwenpaw.providers.provider_manager import ProviderManager
+from qwenpaw.local_models.manager import LocalModelManager
 
 # Set up logging
 logging.basicConfig(
@@ -17,12 +20,9 @@ logger = logging.getLogger(__name__)
 
 def test_manager_initialization():
     """Test that managers initialize quickly."""
-    logger.info("=" * 70)
+    logger.info("%s", "=" * 70)
     logger.info("Test 1: Manager Initialization Speed")
-    logger.info("=" * 70)
-
-    from qwenpaw.providers.provider_manager import ProviderManager
-    from qwenpaw.local_models.manager import LocalModelManager
+    logger.info("%s", "=" * 70)
 
     # Test ProviderManager initialization
     logger.info("Testing ProviderManager initialization...")
@@ -30,9 +30,9 @@ def test_manager_initialization():
     pm = ProviderManager.get_instance()
     pm_init_time = time.perf_counter() - t0
 
-    logger.info(f"✓ ProviderManager initialized in {pm_init_time:.3f}s")
-    logger.info(f"  - Lazy init status: {pm._lazy_init_done}")
-    logger.info(f"  - Builtin providers: {len(pm.builtin_providers)}")
+    logger.info("✓ ProviderManager initialized in %.3fs", pm_init_time)
+    logger.info("  - Lazy init status: %s", pm._lazy_init_done)
+    logger.info("  - Builtin providers: %d", len(pm.builtin_providers))
 
     # Test LocalModelManager initialization
     logger.info("Testing LocalModelManager initialization...")
@@ -40,31 +40,29 @@ def test_manager_initialization():
     lm = LocalModelManager.get_instance()
     lm_init_time = time.perf_counter() - t0
 
-    logger.info(f"✓ LocalModelManager initialized in {lm_init_time:.3f}s")
-    logger.info(f"  - Lazy init status: {lm._lazy_init_done}")
-
+    logger.info("✓ LocalModelManager initialized in %.3fs", lm_init_time)
+    logger.info("  - Lazy init status: %s", lm._lazy_init_done)
     # Check timing
     total_init_time = pm_init_time + lm_init_time
     if total_init_time < 1.0:
         logger.info(
-            f"✓ PASS: Total initialization time {total_init_time:.3f}s < 1.0s"
+            "✓ PASS: Total initialization time %.3fs < 1.0s",
+            total_init_time,
         )
         return True
     else:
         logger.warning(
-            f"⚠ SLOW: Total initialization time {total_init_time:.3f}s"
+            "⚠ SLOW: Total initialization time %.3fs",
+            total_init_time,
         )
         return True
 
 
 def test_lazy_initialization():
     """Test that lazy initialization is triggered on access."""
-    logger.info("\n" + "=" * 70)
+    logger.info("\n%s", "=" * 70)
     logger.info("Test 2: Lazy Initialization on Access")
-    logger.info("=" * 70)
-
-    from qwenpaw.providers.provider_manager import ProviderManager
-    from qwenpaw.local_models.manager import LocalModelManager
+    logger.info("%s", "=" * 70)
 
     pm = ProviderManager.get_instance()
     lm = LocalModelManager.get_instance()
@@ -77,11 +75,15 @@ def test_lazy_initialization():
 
     if provider and pm_after:
         logger.info(
-            f"✓ ProviderManager lazy init triggered: {pm_before} -> {pm_after}"
+            "✓ ProviderManager triggered: %s -> %s",
+            pm_before,
+            pm_after,
         )
     else:
         logger.warning(
-            f"⚠ ProviderManager issue: lazy_init={pm_after}, provider={provider is not None}"
+            "⚠ ProviderManager issue: lazy_init=%s, provider=%s",
+            pm_after,
+            "available" if provider is not None else "missing",
         )
 
     # Test LocalModelManager config access
@@ -92,14 +94,19 @@ def test_lazy_initialization():
 
     if config and lm_after:
         logger.info(
-            f"✓ LocalModelManager lazy init triggered: {lm_before} -> {lm_after}"
+            "✓ LocalModelManager triggered: %s -> %s",
+            lm_before,
+            lm_after,
         )
         logger.info(
-            f"  - Config max_context_length: {config.max_context_length}"
+            "  - Config max_context_length: %s",
+            config.max_context_length,
         )
     else:
         logger.warning(
-            f"⚠ LocalModelManager issue: lazy_init={lm_after}, config={config is not None}"
+            "⚠ lazy_init=%s, config=%s",
+            lm_after,
+            "present" if config is not None else "missing",
         )
 
     return True
@@ -107,11 +114,9 @@ def test_lazy_initialization():
 
 def test_builtin_providers_available():
     """Test that builtin providers are immediately available."""
-    logger.info("\n" + "=" * 70)
+    logger.info("\n%s", "=" * 70)
     logger.info("Test 3: Builtin Providers Immediate Availability")
-    logger.info("=" * 70)
-
-    from qwenpaw.providers.provider_manager import ProviderManager
+    logger.info("%s", "=" * 70)
 
     pm = ProviderManager.get_instance()
 
@@ -121,77 +126,81 @@ def test_builtin_providers_available():
     for provider_id in builtin_to_check:
         provider = pm.get_provider(provider_id)
         if provider:
-            logger.info(f"✓ {provider_id}: {provider.name}")
+            logger.info("✓ %s: %s", provider_id, provider.name)
             available_count += 1
         else:
-            logger.warning(f"✗ {provider_id}: NOT FOUND")
+            logger.warning("✗ %s: NOT FOUND", provider_id)
 
     if available_count == len(builtin_to_check):
         logger.info(
-            f"✓ PASS: All {available_count} builtin providers available"
+            "✓ PASS: All %s builtin providers available",
+            available_count,
         )
         return True
     else:
         logger.warning(
-            f"⚠ {available_count}/{len(builtin_to_check)} providers available"
+            "⚠ %d/%d providers available",
+            available_count,
+            len(builtin_to_check),
         )
         return True
 
 
 def test_custom_providers_deferred():
     """Test that custom providers are loaded deferred but accessible."""
-    logger.info("\n" + "=" * 70)
+    logger.info("\n%s", "=" * 70)
     logger.info("Test 4: Custom Providers Deferred Loading")
-    logger.info("=" * 70)
-
-    from qwenpaw.providers.provider_manager import ProviderManager
+    logger.info("%s", "=" * 70)
 
     pm = ProviderManager.get_instance()
 
-    logger.info(f"Custom providers at start: {len(pm.custom_providers)}")
+    logger.info(
+        "Custom providers at start: %s",
+        len(pm.custom_providers),
+    )
 
     # Force completion
     pm._ensure_initialized()
-    logger.info(
-        f"Custom providers after ensure_initialized: {len(pm.custom_providers)}"
-    )
-    logger.info(f"✓ Custom provider loading deferred and accessible")
+    if logger.isEnabledFor(logging.INFO):
+        custom_count = len(pm.custom_providers)
+        logger.info("Custom providers: %d", custom_count)
+    logger.info("✓ Custom provider loading deferred and accessible")
 
     return True
 
 
 def test_no_memory_leaks():
     """Test that lazy initialization doesn't cause memory issues."""
-    logger.info("\n" + "=" * 70)
+    logger.info("\n%s", "=" * 70)
     logger.info("Test 5: No Double Initialization")
-    logger.info("=" * 70)
-
-    from qwenpaw.providers.provider_manager import ProviderManager
-    from qwenpaw.local_models.manager import LocalModelManager
+    logger.info("%s", "=" * 70)
 
     pm = ProviderManager.get_instance()
     lm = LocalModelManager.get_instance()
 
     # Multiple calls to _ensure_initialized should be safe
-    for i in range(3):
+    for _ in range(3):
         pm._ensure_initialized()
         lm._ensure_initialized()
 
     logger.info("✓ Multiple initialization checks completed safely")
-    logger.info(f"  - ProviderManager: lazy_init_done={pm._lazy_init_done}")
-    logger.info(f"  - LocalModelManager: lazy_init_done={lm._lazy_init_done}")
+    logger.info(
+        "  - ProviderManager: lazy_init_done=%s",
+        pm._lazy_init_done,
+    )
+    logger.info(
+        "  - LocalModelManager: lazy_init_done=%s",
+        lm._lazy_init_done,
+    )
 
     return True
 
 
 def test_backward_compatibility():
     """Test that API is backward compatible."""
-    logger.info("\n" + "=" * 70)
+    logger.info("\n%s", "=" * 70)
     logger.info("Test 6: Backward Compatibility")
-    logger.info("=" * 70)
-
-    from qwenpaw.providers.provider_manager import ProviderManager
-    from qwenpaw.local_models.manager import LocalModelManager
+    logger.info("%s", "=" * 70)
 
     pm = ProviderManager.get_instance()
     lm = LocalModelManager.get_instance()
@@ -200,29 +209,29 @@ def test_backward_compatibility():
     try:
         # Get active model
         active = pm.get_active_model()
-        logger.info(f"✓ get_active_model() works: {active}")
+        logger.info("✓ get_active_model() works: %s", active)
 
         # Get config
         config = lm.get_config()
         logger.info(
-            f"✓ get_config() works: max_context={config.max_context_length}"
+            "✓ get_config() works: max_context=%d",
+            config.max_context_length,
         )
 
         logger.info("✓ PASS: All backward compatibility checks passed")
         return True
     except Exception as e:
-        logger.error(f"✗ FAIL: {e}", exc_info=True)
+        logger.error("✗ FAIL: %s", e, exc_info=True)
         return False
 
 
 def test_concurrent_access():
     """Test that concurrent access doesn't cause issues."""
-    logger.info("\n" + "=" * 70)
+    logger.info("\n%s", "=" * 70)
     logger.info("Test 7: Concurrent Access Safety")
-    logger.info("=" * 70)
+    logger.info("%s", "=" * 70)
 
     import asyncio
-    from qwenpaw.providers.provider_manager import ProviderManager
 
     pm = ProviderManager.get_instance()
 
@@ -245,7 +254,11 @@ def test_concurrent_access():
             logger.warning("⚠ Some concurrent accesses failed")
             return True
     except Exception as e:
-        logger.error(f"✗ Concurrent access error: {e}")
+        logger.error(
+            "✗ Concurrent access error: %s",
+            e,
+            exc_info=True,
+        )
         return True
 
 
@@ -273,7 +286,10 @@ def main():
             results[test_name] = test_func()
         except Exception as e:
             logger.error(
-                f"Test '{test_name}' failed with exception: {e}", exc_info=True
+                "Test '%s' failed with exception: %s",  # 关键：用占位符替代 f-string
+                test_name,
+                e,
+                exc_info=True,
             )
             results[test_name] = False
 

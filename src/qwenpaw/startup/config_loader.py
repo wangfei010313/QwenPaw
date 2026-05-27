@@ -41,21 +41,24 @@ class OptimizedConfigLoader:
 
         # Try to get from cache first
         cached_config = self._cache.get(
-            cache_key, version=self._config_version
+            cache_key,
+            version=self._config_version,
         )
         if cached_config is not None:
-            logger.debug(f"Using cached configuration")
+            logger.debug("Using cached configuration")
             return cached_config
 
         # Load from disk
-        logger.debug(f"Loading configuration from disk")
+        logger.debug("Loading configuration from disk")
         config = _original_load_config(config_path)
 
         # Cache for next time
         try:
             # Only cache serializable parts
             self._cache.set(
-                cache_key, config.model_dump(), version=self._config_version
+                cache_key,
+                config.model_dump(),
+                version=self._config_version,
             )
         except Exception as e:
             logger.debug(f"Failed to cache config: {e}")
@@ -70,7 +73,7 @@ class OptimizedConfigLoader:
         """
         cache_key = f"config_{str(config_path or 'default')}"
         self._cache.clear(cache_key)
-        logger.debug(f"Cleared configuration cache")
+        logger.debug("Cleared configuration cache")
 
 
 async def parallel_load_envs_and_config(
@@ -101,7 +104,7 @@ async def parallel_load_envs_and_config(
         env_task,
     )
 
-    logger.debug(f"Parallel config/env load completed")
+    logger.debug("Parallel config/env load completed")
     return config, envs_loaded
 
 
@@ -113,7 +116,7 @@ async def _load_envs_async() -> bool:
     """
     try:
         await asyncio.to_thread(_original_load_envs)
-        logger.debug(f"Environment variables loaded")
+        logger.debug("Environment variables loaded")
         return True
     except Exception as e:
         logger.debug(f"Failed to load environment variables: {e}")
