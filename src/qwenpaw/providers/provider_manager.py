@@ -1009,7 +1009,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
     _instance = None
 
-    def __init__(self, lazy_init: bool = True) -> None:
+    def __init__(self, lazy_init: bool = False) -> None:
         # Initialize provider manager, load providers from registry and store
         # any necessary state (e.g., cached models).
         self.builtin_providers: Dict[str, Provider] = {}
