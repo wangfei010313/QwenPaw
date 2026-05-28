@@ -1830,7 +1830,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     # pylint: disable=too-many-branches
     def _migrate_legacy_providers(self):
         """Migrate from legacy providers.json format to the new structure."""
-        legacy_path = SECRET_DIR / "providers.json"
+        legacy_path = self.root_path.parent / "providers.json"
         if legacy_path.exists() and legacy_path.is_file():
             with open(legacy_path, "r", encoding="utf-8") as f:
                 legacy_data = json.load(f)
@@ -1839,7 +1839,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             active_model = legacy_data.get("active_llm", {})
             # Migrate built-in providers
             for provider_id, config in builtin_providers.items():
-                provider = self.get_provider(provider_id)
+                provider = self.builtin_providers.get(provider_id)
                 if not provider:
                     logger.warning(
                         "Legacy provider '%s' not found in"
@@ -1862,8 +1862,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 custom_provider = OpenAIProvider(
                     id=provider_id,
                     name=data.get("name", provider_id),
-                    base_url=data.get("base_url", ""),
+                    base_url=(
+                        data.get("base_url")
+                        or data.get("default_base_url", "")
+                    ),
                     api_key=data.get("api_key", ""),
+                    api_key_prefix=data.get("api_key_prefix", ""),
                     is_custom=True,
                 )
                 if "models" in data:
