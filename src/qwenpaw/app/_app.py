@@ -278,8 +278,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 exc_info=True,
             )
 
-    # Schedule telemetry for deferred execution
-    asyncio.create_task(_deferred_telemetry())
+    # Schedule telemetry for deferred execution (keep reference to avoid GC)
+    _telemetry_task = asyncio.create_task(_deferred_telemetry())  # noqa: F841
 
     logger.debug("Checking for legacy config migration...")
     migrate_legacy_workspace_to_default_agent()
@@ -355,14 +355,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 await _init_plugin_system(app, provider_manager)
                 logger.info("MCP plugin system initialized successfully.")
             except Exception as mcp_error:
-                # 捕获如 FileNotFoundError (tavily_mcp 缺失) 等各种异常
                 logger.warning(
-                    "Failed to initialize MCP plugin system.Error: %s",
+                    "Failed to initialize MCP plugin system. Error: %s",
                     mcp_error,
                 )
-                # --- 修改结束 ---
 
-                # 同样增加异常保护，防止本地模型加载失败导致崩溃
+            # Start local model resume with defensive loading
             logger.debug("Starting local model resume...")
             try:
                 provider_manager.start_local_model_resume(local_model_manager)

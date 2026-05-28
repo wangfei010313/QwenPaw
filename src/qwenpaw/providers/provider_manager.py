@@ -8,7 +8,6 @@ import os
 from typing import Dict, List
 import logging
 import json
-import threading
 
 from pydantic import BaseModel
 
@@ -1202,39 +1201,13 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
         return True
 
-    def start_local_model_resume(self, _local_manager) -> None:
-        """
-        Blocking version of start_local_model_resume.
-        This function is thread-safe and will work correctly
-        even if called from a thread pool.
-        """
-        logger.debug("Starting local model resume procedure (blocking mode)")
-
-        # 获取当前线程
-        current_thread = threading.current_thread()
-        logger.debug(
-            "Current thread for local model resume: %s",
-            current_thread.name,
+    def start_local_model_resume(self, local_manager) -> None:
+        """Schedule background restore of the active local model server."""
+        task = asyncio.create_task(
+            self._resume_local_model(local_manager),
+            name="qwenpaw-local-model-resume",
         )
-
-        # 尝试获取当前线程的事件循环（如果存在）
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # 如果当前线程没有事件循环（比如在子线程中），则创建一个新的
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        # 检查循环是否正在运行（通常子线程的循环是停止的）
-        if loop.is_running():
-            logger.warning(
-                "Event loop is already running in this thread. "
-                "Using temporary executor.",
-            )
-            logger.error(
-                "Cannot schedule task:"
-                "event loop is running but we cannot get main loop reference",
-            )
+        task.add_done_callback(self._on_local_model_resume_done)
 
     @staticmethod
     def _on_local_model_resume_done(task: asyncio.Task[None]) -> None:
