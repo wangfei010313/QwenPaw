@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=redefined-outer-name,protected-access,import-outside-toplevel
 """Unit tests for plugin API extensions: #8, #10, #16.
 
 Tests cover:
@@ -7,14 +8,12 @@ Tests cover:
 - #16: register_skill_provider API contract
 """
 
-import asyncio
 import importlib.util
-import inspect
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -187,7 +186,7 @@ class TestUninstallHook:
 
         async_called = []
 
-        async def async_cleanup(plugin_id: str, delete_files: bool):
+        async def async_cleanup(plugin_id: str, **_kwargs):
             async_called.append(plugin_id)
 
         fresh_registry.register_uninstall_hook(
@@ -226,7 +225,7 @@ class TestUninstallHook:
         )
         loader._loaded_plugins["err-plugin"] = record
 
-        def bad_hook(plugin_id: str, delete_files: bool):
+        def bad_hook(**_kwargs):
             raise RuntimeError("hook failed")
 
         fresh_registry.register_uninstall_hook(
