@@ -7,11 +7,8 @@ Analyzes startup logs and provides detailed performance metrics.
 
 import re
 import sys
-import time
-import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-from datetime import datetime
+from typing import Dict, List
 
 
 class StartupLogAnalyzer:
@@ -21,7 +18,9 @@ class StartupLogAnalyzer:
     PATTERNS = {
         "server_ready": r"Uvicorn running on (.*)",
         "critical_time": r"Critical startup completed in ([\d.]+) seconds",
-        "total_time": r"Background startup completed in ([\d.]+) seconds total",
+        "total_time": (
+            r"Background startup completed in ([\d.]+) seconds total"
+        ),
         "agent_startup": r"Starting.*agents",
         "plugin_init": r"Initializing plugin system",
         "local_model_resume": r"Starting local model resume",
@@ -72,9 +71,25 @@ class StartupLogAnalyzer:
         report = "\n" + "=" * 70 + "\n"
         report += "QwenPaw 启动性能分析报告\n"
         report += "=" * 70 + "\n\n"
+        report += self._render_metrics_section()
+        report += self._render_error_section()
+        report += self._render_optimization_section()
+        report += self._render_recommendations_section()
+        report += "\n" + "=" * 70 + "\n"
+        return report
 
-        # Metrics section
-        report += "性能指标:\n"
+    def _format_rating(
+        self,
+        value: float,
+        thresholds: list[tuple[float, str]],
+    ) -> str:
+        for threshold, label in thresholds:
+            if value < threshold:
+                return label
+        return "⭐ 需改进"
+
+    def _render_metrics_section(self) -> str:
+        report = "性能指标:\n"
         report += "-" * 70 + "\n"
 
         if "server_ready" in self.metrics:
@@ -83,52 +98,54 @@ class StartupLogAnalyzer:
         if "critical_time" in self.metrics:
             ct = self.metrics["critical_time"]
             report += f"Critical时间:      {ct:.3f}s\n"
-
-            # Performance assessment
-            if ct < 0.3:
-                rating = "⭐⭐⭐⭐⭐ 极优"
-            elif ct < 0.5:
-                rating = "⭐⭐⭐⭐ 优秀"
-            elif ct < 0.8:
-                rating = "⭐⭐⭐ 良好"
-            elif ct < 1.0:
-                rating = "⭐⭐ 可接受"
-            else:
-                rating = "⭐ 需改进"
-            report += f"  {rating}\n"
+            report += (
+                "  "
+                + self._format_rating(
+                    ct,
+                    [
+                        (0.3, "⭐⭐⭐⭐⭐ 极优"),
+                        (0.5, "⭐⭐⭐⭐ 优秀"),
+                        (0.8, "⭐⭐⭐ 良好"),
+                        (1.0, "⭐⭐ 可接受"),
+                    ],
+                )
+                + "\n"
+            )
 
         if "total_time" in self.metrics:
             tt = self.metrics["total_time"]
             report += f"总启动时间:        {tt:.3f}s\n"
+            report += (
+                "  "
+                + self._format_rating(
+                    tt,
+                    [
+                        (1.0, "⭐⭐⭐⭐⭐ 极优"),
+                        (1.5, "⭐⭐⭐⭐ 优秀"),
+                        (2.0, "⭐⭐⭐ 良好"),
+                        (2.5, "⭐⭐ 可接受"),
+                    ],
+                )
+                + "\n"
+            )
 
-            # Performance assessment
-            if tt < 1.0:
-                rating = "⭐⭐⭐⭐⭐ 极优"
-            elif tt < 1.5:
-                rating = "⭐⭐⭐⭐ 优秀"
-            elif tt < 2.0:
-                rating = "⭐⭐⭐ 良好"
-            elif tt < 2.5:
-                rating = "⭐⭐ 可接受"
-            else:
-                rating = "⭐ 需改进"
-            report += f"  {rating}\n"
+        return report
 
-        # Error section
-        report += "\n错误检查:\n"
+    def _render_error_section(self) -> str:
+        report = "\n错误检查:\n"
         report += "-" * 70 + "\n"
-
         if self.errors:
             report += f"❌ 发现 {len(self.errors)} 个错误:\n\n"
-            for i, error in enumerate(self.errors[:5], 1):  # Show first 5
+            for i, error in enumerate(self.errors[:5], 1):
                 report += f"  {i}. {error}\n"
             if len(self.errors) > 5:
                 report += f"  ... 以及 {len(self.errors) - 5} 个其他错误\n"
         else:
             report += "✅ 未发现错误\n"
+        return report
 
-        # Optimization check
-        report += "\n优化效果检查:\n"
+    def _render_optimization_section(self) -> str:
+        report = "\n优化效果检查:\n"
         report += "-" * 70 + "\n"
 
         checks = [
@@ -145,15 +162,18 @@ class StartupLogAnalyzer:
             else:
                 report += f"  ? {check_name} (未找到)\n"
 
-        # Recommendations
-        report += "\n建议:\n"
+        return report
+
+    def _render_recommendations_section(self) -> str:
+        report = "\n建议:\n"
         report += "-" * 70 + "\n"
 
-        recommendations = []
-
-        if "critical_time" in self.metrics:
-            if self.metrics["critical_time"] > 0.5:
-                recommendations.append("- 考虑进一步并行化关键路径任务")
+        recommendations: List[str] = []
+        if (
+            "critical_time" in self.metrics
+            and self.metrics["critical_time"] > 0.5
+        ):
+            recommendations.append("- 考虑进一步并行化关键路径任务")
 
         if self.errors:
             recommendations.append("- 修复检测到的错误")
@@ -163,8 +183,6 @@ class StartupLogAnalyzer:
 
         for rec in recommendations:
             report += f"{rec}\n"
-
-        report += "\n" + "=" * 70 + "\n"
 
         return report
 
@@ -196,7 +214,8 @@ def main():
         print("⚠ 未找到日志文件")
         print("\n如何生成日志:")
         print(
-            "1. 运行: python -m qwenpaw app --log-level debug 2>&1 | tee app.log"
+            "1. 运行: python -m qwenpaw app --log-level debug "
+            "2>&1 | tee app.log",
         )
         print("2. 等待启动完成")
         print("3. 按 Ctrl+C 停止服务器")

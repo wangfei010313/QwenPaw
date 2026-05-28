@@ -104,6 +104,10 @@ class LocalModelManager:  # pylint: disable=too-many-public-methods
         if not self._lazy_init_done:
             self._complete_initialization()
 
+    def ensure_initialized(self) -> None:
+        """Ensure lazy initialization is complete."""
+        self._ensure_initialized()
+
     @staticmethod
     def _write_config_file(
         config_path,
@@ -267,7 +271,8 @@ class LocalModelManager:  # pylint: disable=too-many-public-methods
 
     @staticmethod
     def get_instance() -> LocalModelManager:
-        """Return the singleton LocalModelManager instance with lazy initialization."""
+        """Return the singleton LocalModelManager
+        instance with lazy initialization."""
         # This is a simple module-level singleton pattern. In a more complex
         # application, you might want to use a dependency injection framework.
         if LocalModelManager._instance is None:

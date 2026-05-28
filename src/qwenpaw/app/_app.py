@@ -56,8 +56,6 @@ from .channels.registry import register_custom_channel_routes
 from ..startup import (
     ProgressiveInitializer,
     parallel_tasks,
-    LazyLoader,
-    get_startup_cache,
 )
 from ..startup.config_loader import parallel_load_envs_and_config
 
@@ -281,7 +279,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             )
 
     # Schedule telemetry for deferred execution
-    telemetry_task = asyncio.create_task(_deferred_telemetry())
+    asyncio.create_task(_deferred_telemetry())
 
     logger.debug("Checking for legacy config migration...")
     migrate_legacy_workspace_to_default_agent()
@@ -343,11 +341,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
             # OPTIMIZATION: Background path - deferred hooks (lowest priority)
             initializer.add_background(
-                _deferred_approval_setup(app, multi_agent_manager)
+                _deferred_approval_setup(app, multi_agent_manager),
             )
 
             # Execute initialization with progressive strategy
-            critical_results, deferred_task = await initializer.initialize()
+            _, deferred_task = await initializer.initialize()
 
             # --- 修改开始：对 MCP 插件系统进行防御性加载 ---
             # 尝试加载 MCP 配置，如果能找到该配置文件，则进行加载
@@ -359,12 +357,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             except Exception as mcp_error:
                 # 捕获如 FileNotFoundError (tavily_mcp 缺失) 等各种异常
                 logger.warning(
-                    "Failed to initialize MCP plugin system. Skipping this step. Error: %s",
+                    "Failed to initialize MCP plugin system.Error: %s",
                     mcp_error,
                 )
                 # --- 修改结束 ---
 
-                # Start local model recovery (must be called in main event loop context)
                 # 同样增加异常保护，防止本地模型加载失败导致崩溃
             logger.debug("Starting local model resume...")
             try:
@@ -375,14 +372,13 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                     model_error,
                 )
 
-                # OPTIMIZATION: Complete lazy initialization in background after core tasks
-                # This ensures plugin system and agents initialize before lazy loading completes
             logger.debug(
-                "Completing lazy initialization of providers and models in background..."
+                "Completing lazy initialization of providers and "
+                "models in background",
             )
             try:
-                provider_manager._complete_initialization()
-                local_model_manager._complete_initialization()
+                provider_manager.ensure_initialized()
+                local_model_manager.ensure_initialized()
                 logger.debug("Lazy initialization completed")
             except Exception as exc:
                 logger.warning(
@@ -425,7 +421,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             )
 
     async def _init_plugin_system(
-        app: FastAPI, provider_manager: ProviderManager
+        app: FastAPI,
+        provider_manager: ProviderManager,
     ):
         """Initialize plugin system asynchronously.
 
@@ -526,26 +523,30 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             async def execute_hook(hook):
                 try:
                     logger.debug(
-                        f"Executing startup hook '{hook.hook_name}' "
-                        f"from plugin '{hook.plugin_id}'",
+                        "Executing startup hook '%s' from plugin '%s'",
+                        hook.hook_name,
+                        hook.plugin_id,
                     )
                     result = hook.callback()
                     if inspect.iscoroutine(result) or inspect.isawaitable(
-                        result
+                        result,
                     ):
                         await result
                     logger.debug(
-                        f"Completed startup hook '{hook.hook_name}' "
-                        f"from plugin '{hook.plugin_id}'",
+                        "Completed startup hook '%s' from plugin '%s'",
+                        hook.hook_name,
+                        hook.plugin_id,
                     )
                 except Exception as e:
                     logger.error(
-                        f"Failed to execute startup hook "
-                        f"'{hook.hook_name}' from plugin '{hook.plugin_id}': {e}",
+                        "Failed to execute startup hook '%s' "
+                        "from plugin '%s': %s",
+                        hook.hook_name,
+                        hook.plugin_id,
+                        e,
                         exc_info=True,
                     )
 
-            # Execute startup hooks in parallel (up to 2 concurrent to avoid conflicts)
             await parallel_tasks(
                 [execute_hook(hook) for hook in startup_hooks],
                 max_concurrent=2,

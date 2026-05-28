@@ -1029,6 +1029,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         except Exception as e:
             logger.warning("Failed to migrate legacy providers: %s", e)
 
+        # If legacy migration created or restored the active model file,
+        # load it eagerly so consumers can access manager.active_model
+        # immediately after construction.
+        if self.active_model is None:
+            self.active_model = self.load_active_model()
+
         # Lazy initialization: defer heavy I/O to background
         if not lazy_init:
             self._complete_initialization()
@@ -1036,8 +1042,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     def _complete_initialization(self) -> None:
         """Complete initialization: load storage and apply annotations.
 
-        This is called automatically during first access to custom/active models
-        or can be called explicitly in background startup phase.
+        This is called automatically during first access to custom/active
+        models or can be called explicitly in background startup phase.
         """
         if self._lazy_init_done:
             return
@@ -1046,6 +1052,10 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self._init_from_storage()
         self._apply_default_annotations()
         self._lazy_init_done = True
+
+    def ensure_initialized(self) -> None:
+        """Ensure lazy initialization is complete."""
+        self._complete_initialization()
         logger.debug("ProviderManager: complete initialization done")
 
     def _prepare_disk_storage(self):
@@ -1095,7 +1105,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self.builtin_providers[provider.id] = provider
 
     def _ensure_initialized(self) -> None:
-        """Ensure lazy initialization is complete before accessing custom providers."""
+        """Ensure lazy initialization is
+        complete before accessing custom providers."""
         if not self._lazy_init_done:
             self._complete_initialization()
 
@@ -1191,15 +1202,20 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
         return True
 
-    def start_local_model_resume(self, local_manager) -> None:
+    def start_local_model_resume(self, _local_manager) -> None:
         """
         Blocking version of start_local_model_resume.
-        This function is thread-safe and will work correctly even if called from a thread pool.
+        This function is thread-safe and will work correctly
+        even if called from a thread pool.
         """
         logger.debug("Starting local model resume procedure (blocking mode)")
 
         # 获取当前线程
         current_thread = threading.current_thread()
+        logger.debug(
+            "Current thread for local model resume: %s",
+            current_thread.name,
+        )
 
         # 尝试获取当前线程的事件循环（如果存在）
         try:
@@ -1212,10 +1228,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         # 检查循环是否正在运行（通常子线程的循环是停止的）
         if loop.is_running():
             logger.warning(
-                "Event loop is already running in this thread. Using temporary executor."
+                "Event loop is already running in this thread. "
+                "Using temporary executor.",
             )
             logger.error(
-                "Cannot schedule task: event loop is running but we cannot get main loop reference"
+                "Cannot schedule task:"
+                "event loop is running but we cannot get main loop reference",
             )
 
     @staticmethod
@@ -1294,7 +1312,6 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     async def add_custom_provider(self, provider_data: ProviderInfo):
         # Add a new custom provider with the given data. This will update the
         # providers.json file and make the new provider available in the UI.
-        self._ensure_initialized()
         provider_payload = provider_data.model_dump()
         provider_payload["id"] = self._resolve_custom_provider_id(
             provider_data.id,
@@ -1313,7 +1330,6 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     def remove_custom_provider(self, provider_id: str) -> bool:
         # Remove a custom provider by its ID. This will update the
         # providers.json file and remove the provider from the UI.
-        self._ensure_initialized()
         if provider_id in self.custom_providers:
             del self.custom_providers[provider_id]
             provider_path = self.custom_path / f"{provider_id}.json"
@@ -1326,7 +1342,6 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         # Set the active provider and model for the agent. This will update
         # providers.json and determine which provider/model is used when the
         # agent creates chat model instances.
-        self._ensure_initialized()
         # Normalize provider ID for backward compatibility
         provider_id = self._normalize_provider_id(provider_id)
         provider = self.get_provider(provider_id)
@@ -1752,7 +1767,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             with open(active_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return ModelSlotConfig.model_validate(data)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to load active model from %s: %s",
+                active_path,
+                exc,
+            )
             return None
 
     def _migrate_copaw_config(self) -> None:
@@ -1958,11 +1978,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         registry = ExpectedCapabilityRegistry()
         for provider in self.builtin_providers.values():
             for model in provider.models:
-                # Already fully annotated (e.g. by a prior probe) → skip
                 if model.supports_multimodal is not None:
                     continue
 
-                # Static annotations present → compute derived flag only
                 if (
                     model.supports_image is not None
                     or model.supports_video is not None
@@ -2159,7 +2177,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
     @staticmethod
     def get_instance() -> "ProviderManager":
-        """Get the singleton instance of ProviderManager with lazy initialization."""
+        """Get the singleton instance of ProviderManager
+        with lazy initialization."""
         if ProviderManager._instance is None:
             ProviderManager._instance = ProviderManager(lazy_init=True)
         return ProviderManager._instance

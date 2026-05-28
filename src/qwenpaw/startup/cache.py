@@ -2,8 +2,8 @@
 """Startup-time cache management for accelerating initialization.
 
 This module provides caching mechanisms to reduce disk I/O and module
-import overhead during application startup, particularly on Windows where
-file access can be slower.
+import overhead during application startup.
+It is especially useful on Windows where file access can be slower.
 """
 
 import json
@@ -21,16 +21,19 @@ class StartupCache:
     """Thread-safe cache for startup data with TTL and versioning."""
 
     def __init__(
-        self, cache_dir: Optional[Path] = None, ttl_seconds: int = 3600
+        self,
+        cache_dir: Optional[Path] = None,
+        ttl_seconds: int = 3600,
     ):
         """Initialize startup cache.
 
         Args:
-            cache_dir: Directory for persistent cache files. If None, uses temp.
+            cache_dir: Directory for persistent cache files.
+            If None, uses temp.
             ttl_seconds: Time-to-live for cache entries in seconds.
         """
         self.cache_dir = cache_dir or Path(
-            os.path.expanduser("~/.qwenpaw/.cache")
+            os.path.expanduser("~/.qwenpaw/.cache"),
         )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.ttl_seconds = ttl_seconds

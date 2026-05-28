@@ -9,14 +9,14 @@ import asyncio
 import functools
 import logging
 import threading
-from typing import Any, Callable, Coroutine, List, Optional, TypeVar
+from typing import Any, Callable, Coroutine, Generic, List, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
-class LazyLoader:
+class LazyLoader(Generic[T]):
     """Deferred loading wrapper for expensive objects."""
 
     def __init__(self, loader_fn: Callable[[], T], name: str = ""):
@@ -39,6 +39,7 @@ class LazyLoader:
             Loaded value
         """
         if self._loaded:
+            assert self._value is not None
             return self._value
 
         with self._lock:
@@ -49,7 +50,7 @@ class LazyLoader:
                     self._loaded = True
                 except Exception as e:
                     logger.error(
-                        f"LazyLoader: Failed to load {self._name}: {e}"
+                        f"LazyLoader: Failed to load {self._name}: {e}",
                     )
                     raise
 
@@ -188,15 +189,18 @@ class ProgressiveInitializer:
         """
         # Phase 1: Critical path (must complete)
         logger.debug(
-            f"ProgressiveInitializer: Critical phase ({len(self._critical)} tasks)"
+            "ProgressiveInitializer: Critical phase (%s tasks)",
+            len(self._critical),
         )
         critical_results = await parallel_tasks(self._critical)
 
         # Phase 2: Important + Background (run concurrently in background)
         async def deferred_init():
             logger.debug(
-                f"ProgressiveInitializer: Deferred phase "
-                f"({len(self._important)} important, {len(self._background)} background)",
+                "ProgressiveInitializer: "
+                "Deferred phase (%s important, %s background)",
+                len(self._important),
+                len(self._background),
             )
             important_results = await parallel_tasks(self._important)
             background_results = await parallel_tasks(self._background)
