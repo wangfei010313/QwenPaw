@@ -75,8 +75,46 @@ def _install_certifi_env() -> None:
     os.environ.setdefault("CURL_CA_BUNDLE", cert_file)
 
 
+def _ensure_cli_on_path() -> None:
+    """Ensure the packaged ``qwenpaw`` CLI is reachable by child processes.
+
+    In conda-pack / PyInstaller desktop builds the ``Scripts/`` directory
+    containing ``qwenpaw.exe`` is not on the system PATH.  Skills like
+    *cron* invoke ``qwenpaw cron ...`` as a shell command, which fails
+    with "command not found" unless we prepend that directory here.
+
+    This is a no-op when ``qwenpaw`` is already discoverable on PATH
+    (e.g. pip-installed environments or development setups).
+    """
+    import shutil
+
+    if shutil.which("qwenpaw"):
+        return
+
+    # Locate Scripts/ (Windows) or bin/ (Unix) relative to sys.executable
+    scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
+    if not os.path.isdir(scripts_dir):
+        scripts_dir = os.path.join(os.path.dirname(sys.executable), "bin")
+    if not os.path.isdir(scripts_dir):
+        # Fall back to the directory containing the interpreter itself
+        scripts_dir = os.path.dirname(sys.executable)
+
+    qwenpaw_exe = os.path.join(scripts_dir, "qwenpaw.exe")
+    qwenpaw_bin = os.path.join(scripts_dir, "qwenpaw")
+    if os.path.isfile(qwenpaw_exe) or os.path.isfile(qwenpaw_bin):
+        os.environ["PATH"] = (
+            scripts_dir + os.pathsep + os.environ.get("PATH", "")
+        )
+        logger.info(
+            "Desktop: prepended %s to PATH for CLI access",
+            scripts_dir,
+        )
+
+
 def _install_desktop_runtime() -> None:
     os.environ.setdefault(DESKTOP_APP_ENV, "1")
+    # Ensure qwenpaw CLI is reachable for skills that shell out (e.g. cron)
+    _ensure_cli_on_path()
     # Must run before importing the FastAPI app: it applies CORS middleware
     # from qwenpaw.constant.CORS_ORIGINS at import time.
     _ensure_qwenpaw_app_not_loaded()
