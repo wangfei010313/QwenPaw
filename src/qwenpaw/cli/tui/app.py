@@ -1371,7 +1371,12 @@ def _path_from_file_reference(value: str) -> Path | None:
         parsed = urlparse(value)
         if parsed.netloc and parsed.netloc not in {"localhost", "127.0.0.1"}:
             return None
-        return Path(unquote(parsed.path)).expanduser()
+        # On Windows, file:///C:/path has parsed.path="/C:/path";
+        # url2pathname correctly strips the leading slash.
+        from urllib.request import url2pathname
+
+        raw_path = url2pathname(parsed.path)
+        return Path(raw_path).expanduser()
     return Path(value).expanduser()
 
 

@@ -370,8 +370,9 @@ def _resolve_local_path(url: str) -> Optional[str]:
     if not url:
         return None
     if url.startswith("file://"):
-        parsed = urlparse(url)
-        return unquote(parsed.path)
+        from ..utils import file_url_to_local_path
+
+        return file_url_to_local_path(url)
     if url.startswith("/") and not url.startswith("http"):
         return url
     return None

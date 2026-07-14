@@ -25,7 +25,7 @@ from __future__ import annotations
 import base64
 import os
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 # The capping formatters below override agentscope's ``_format_*_source``
@@ -54,6 +54,41 @@ from pydantic import Field
 MAX_INLINE_MEDIA_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
+def _local_path_from_source(source: Any) -> str | None:
+    """Extract a local file path from a URLSource.
+
+    Handles both ``file://`` URLs and plain local paths (produced by
+    ``_fixup_media_list``'s normalization).  Returns ``None`` for remote
+    URLs and non-URLSource objects.
+
+    Pydantic's ``AnyUrl`` may percent-encode non-ASCII characters in
+    local paths (e.g. Chinese usernames); ``unquote()`` reverses that
+    so ``open()`` receives the real filesystem path.
+
+    On Windows, ``os.path.isabs`` recognises both drive-letter paths
+    (``C:/...``) and UNC paths (``//server/share``).  On POSIX it
+    recognises absolute paths starting with ``/``.
+    """
+    if not isinstance(source, URLSource):
+        return None
+    url = str(source.url)
+    if url.startswith("file://"):
+        return url2pathname(urlparse(url).path)
+    # Reject anything that looks like a remote or data URL.
+    if "://" in url or url.startswith("data:"):
+        return None
+    # Decode percent-encoding that AnyUrl may have applied to non-ASCII
+    # path segments (e.g. C:/Users/用户名/… → C:/Users/%E7%94%A8%E6%88%B7/…)
+    url = unquote(url)
+    if os.path.isabs(url):
+        return url
+    # Relative path — only treat as local when the file actually exists
+    # to avoid misinterpreting a bare filename as a local path.
+    if os.path.isfile(url):
+        return url
+    return None
+
+
 def inline_media_size(source: Any) -> int | None:
     """Return the byte size of *source* if it would be inlined locally.
 
@@ -61,9 +96,8 @@ def inline_media_size(source: Any) -> int | None:
     unrecognised source types so the caller leaves them untouched.
     """
     if isinstance(source, URLSource):
-        url = str(source.url)
-        if url.startswith("file://"):
-            path = url2pathname(urlparse(url).path)
+        path = _local_path_from_source(source)
+        if path is not None:
             try:
                 return os.path.getsize(path)
             except OSError:
@@ -125,18 +159,16 @@ class CappingFormatterMixin:  # pylint: disable=too-few-public-methods
 
     @staticmethod
     def _local_source_to_base64(source: Any) -> Any:
-        """Convert a local ``file://`` URLSource to a Base64Source.
+        """Convert a local ``file://`` URLSource (or plain local path)
+        to a Base64Source.
 
         Non-local sources (remote URLs, already-base64 sources, anything
         else) are returned unchanged so the base formatter handles them as
         before.
         """
-        if not isinstance(source, URLSource):
+        path = _local_path_from_source(source)
+        if path is None:
             return source
-        url = str(source.url)
-        if not url.startswith("file://"):
-            return source
-        path = url2pathname(urlparse(url).path)
         with open(path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
         return Base64Source(data=encoded, media_type=source.media_type)

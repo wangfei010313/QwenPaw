@@ -746,10 +746,13 @@ def _fixup_media_list(items: list) -> None:
                     ),
                 )
         elif btype == "data":
-            # 2.0 DataBlock — decode percent-encoded file:// URLs and
+            # 2.0 DataBlock — normalize file:// URLs to local paths and
             # check if local file still exists.  Pydantic's AnyUrl
             # re-encodes non-ASCII chars; we must undo that before
-            # the DashScope formatter tries to open() the path.
+            # the formatter tries to open() the path.  On Windows,
+            # file:///C:/... must also be converted to C:/... to avoid
+            # invalid paths in downstream formatters that use a naive
+            # removeprefix("file://").
             source = getattr(block, "source", None)
             url_str = str(getattr(source, "url", "")) if source else ""
             if url_str.startswith("file://"):
@@ -769,8 +772,14 @@ def _fixup_media_list(items: list) -> None:
                             f" — file deleted from disk]"
                         ),
                     )
-                elif unquote(url_str) != url_str:
-                    source.url = unquote(url_str)
+                else:
+                    # Always normalize file:// URLs to local paths so
+                    # downstream formatters don't receive raw URIs like
+                    # file:///C:/... which they convert incorrectly on
+                    # Windows (removeprefix("file://") -> /C:/...).
+                    # _file_url_to_path already handles percent-decoding
+                    # and Windows drive-letter normalization.
+                    source.url = local_path
         elif btype == "file":
             if isinstance(block, dict):
                 source = block.get("source") or {}

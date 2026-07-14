@@ -11,6 +11,7 @@ from typing import Optional
 
 import aiohttp
 
+from ..utils import file_url_to_local_path
 from .constants import MEDIA_MAX_BYTES
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ def resolve_local_path(file_url: str) -> Optional[str]:
     if file_url.startswith(("http://", "https://")):
         return None
     if file_url.startswith("file://"):
-        path_str = file_url[7:]
+        path_str = file_url_to_local_path(file_url) or file_url[7:]
     else:
         path_str = file_url
 

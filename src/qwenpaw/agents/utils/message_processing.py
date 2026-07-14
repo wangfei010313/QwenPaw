@@ -412,7 +412,9 @@ def _coerce_block_to_dict(
         if src_type == "url":
             url_str = str(getattr(source, "url", ""))
             if url_str.startswith("file://"):
-                url_str = url_str.removeprefix("file://")
+                from ..model_factory import _file_url_to_path
+
+                url_str = _file_url_to_path(url_str)
             src_dict = {"type": "url", "url": url_str, "media_type": mt}
         elif src_type == "base64":
             src_dict = {
@@ -467,7 +469,9 @@ async def process_file_and_media_blocks_in_message(msg) -> None:
                 source = getattr(block, "source", None)
                 url = str(getattr(source, "url", "")) if source else ""
                 if url.startswith("file://"):
-                    local_path = url.removeprefix("file://")
+                    from ..model_factory import _file_url_to_path
+
+                    local_path = _file_url_to_path(url)
                     downloaded_files.append((i, local_path))
                 # Remote URL or no URL on a Pydantic block: skip silently.
                 # Adding remote-download for Pydantic DataBlock is a
