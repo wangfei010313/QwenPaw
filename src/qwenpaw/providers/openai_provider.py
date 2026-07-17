@@ -104,7 +104,22 @@ class OpenAIProvider(Provider):
             model_name = (
                 str(getattr(row, "name", "") or model_id).strip() or model_id
             )
-            models.append(ModelInfo(id=model_id, name=model_name))
+            metadata: dict[str, Any] = {}
+            for field in (
+                "context_length",
+                "max_model_len",
+                "max_context_length",
+            ):
+                value = getattr(row, field, None)
+                if isinstance(value, (int, float)) and value >= 1000:
+                    metadata["max_input_length_auto_detected"] = int(value)
+                    break
+            output_limit = getattr(row, "max_output_tokens", None)
+            if isinstance(output_limit, (int, float)) and output_limit > 0:
+                metadata["max_tokens"] = int(output_limit)
+            models.append(
+                ModelInfo(id=model_id, name=model_name, **metadata),
+            )
 
         deduped: List[ModelInfo] = []
         seen: set[str] = set()

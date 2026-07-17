@@ -7,6 +7,7 @@ import logging
 from typing import Dict, List, Literal, Optional
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Body,
     Depends,
     HTTPException,
@@ -100,6 +101,10 @@ class ProviderConfigRequest(BaseModel):
             "Authentication mode: 'api_key' or 'auth_token'. "
             "Only applies to Anthropic-compatible providers."
         ),
+    )
+    auto_discover: bool = Field(
+        default=True,
+        description="Discover models after saving a supported provider",
     )
 
 
@@ -232,6 +237,7 @@ async def list_all_providers(
     summary="Configure a provider",
 )
 async def configure_provider(
+    background_tasks: BackgroundTasks,
     manager: ProviderManager = Depends(get_provider_manager),
     provider_id: str = Path(...),
     body: ProviderConfigRequest = Body(...),
@@ -251,6 +257,19 @@ async def configure_provider(
         raise HTTPException(
             status_code=404,
             detail=f"Provider '{provider_id}' not found",
+        )
+
+    provider = manager.get_provider(provider_id)
+    if (
+        body.auto_discover
+        and provider is not None
+        and provider.support_model_discovery
+        and (provider.api_key or not provider.require_api_key)
+    ):
+        background_tasks.add_task(
+            manager.discover_provider_models,
+            provider_id,
+            save=True,
         )
 
     provider_info = await manager.get_provider_info(provider_id)
@@ -350,6 +369,8 @@ class DiscoverModelsResponse(BaseModel):
         default=0,
         description="How many new models were added into provider config",
     )
+    last_synced_at: Optional[str] = Field(default=None)
+    used_static_fallback: bool = Field(default=False)
 
 
 @router.post(
@@ -412,42 +433,39 @@ async def discover_models(
                 detail=f"Provider '{provider_id}' not found",
             )
 
-        existing_model_ids = {
-            model.id for model in provider.models + provider.extra_models
+        provider_override = None
+        overrides = {
+            "api_key": body.api_key if body else None,
+            "base_url": body.base_url if body else None,
         }
-
-        ok = manager.update_provider(
+        if save:
+            ok = manager.update_provider(provider_id, overrides)
+            if not ok:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Provider '{provider_id}' not found",
+                )
+        else:
+            provider_override = provider.model_copy(
+                update={
+                    key: value
+                    for key, value in overrides.items()
+                    if value is not None
+                },
+            )
+        result = await manager.discover_provider_models(
             provider_id,
-            {
-                "api_key": body.api_key if body else None,
-                "base_url": body.base_url if body else None,
-            },
+            save=save,
+            provider_override=provider_override,
         )
-        if not ok:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Provider '{provider_id}' not found",
-            )
-        try:
-            result = await manager.fetch_provider_models(
-                provider_id,
-                save=save,
-            )
-            success = True
-        except Exception:
-            result = []
-            success = False
-
-        added_count = 0
-        if save and success:
-            added_count = sum(
-                1 for model in result if model.id not in existing_model_ids
-            )
 
         return DiscoverModelsResponse(
-            success=success,
-            models=result,
-            added_count=added_count,
+            success=result.success,
+            models=result.models,
+            added_count=result.added_count,
+            last_synced_at=result.last_synced_at,
+            used_static_fallback=result.used_static_fallback,
+            message=result.error or "",
         )
     except (ValueError, AppBaseException) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

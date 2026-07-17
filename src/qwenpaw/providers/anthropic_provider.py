@@ -135,7 +135,16 @@ class AnthropicProvider(Provider):
 
             if not model_id:
                 continue
-            models.append(ModelInfo(id=model_id, name=model_name))
+            metadata: dict[str, int] = {}
+            context_window = getattr(row, "context_window", None)
+            if (
+                isinstance(context_window, (int, float))
+                and context_window >= 1000
+            ):
+                metadata["max_input_length_auto_detected"] = int(
+                    context_window,
+                )
+            models.append(ModelInfo(id=model_id, name=model_name, **metadata))
 
         deduped: List[ModelInfo] = []
         seen: set[str] = set()
@@ -448,17 +457,17 @@ class _AnthropicChatModelCompat:
                 if self._qp_default_headers:
                     client_kwargs["default_headers"] = self._qp_default_headers
                 if self._qp_auth_mode == "auth_token":
-                    client_kwargs[
-                        "auth_token"
-                    ] = self.credential.api_key.get_secret_value()
+                    client_kwargs["auth_token"] = (
+                        self.credential.api_key.get_secret_value()
+                    )
                     if self._qp_strip_http_client is not None:
-                        client_kwargs[
-                            "http_client"
-                        ] = self._qp_strip_http_client
+                        client_kwargs["http_client"] = (
+                            self._qp_strip_http_client
+                        )
                 else:
-                    client_kwargs[
-                        "api_key"
-                    ] = self.credential.api_key.get_secret_value()
+                    client_kwargs["api_key"] = (
+                        self.credential.api_key.get_secret_value()
+                    )
 
                 self._qp_cached_client = anthropic.AsyncAnthropic(
                     **client_kwargs,

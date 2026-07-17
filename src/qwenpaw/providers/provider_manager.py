@@ -7,10 +7,11 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Dict, List
 
 from agentscope.model import ChatModelBase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from qwenpaw.exceptions import ModelNotFoundException
 
@@ -40,6 +41,18 @@ from .openrouter_provider import OpenRouterProvider
 from .provider import ModelInfo, Provider, ProviderInfo
 
 logger = logging.getLogger(__name__)
+
+
+class ProviderModelDiscoveryResult(BaseModel):
+    """Normalized result of a provider model discovery attempt."""
+
+    success: bool
+    models: List[ModelInfo] = Field(default_factory=list)
+    added_count: int = 0
+    last_synced_at: str | None = None
+    used_static_fallback: bool = False
+    error: str | None = None
+
 
 # -------------------------------------------------------
 # Built-in provider definitions and their default models.
@@ -890,6 +903,7 @@ PROVIDER_MODELSCOPE = OpenAIProvider(
     base_url="https://api-inference.modelscope.cn/v1",
     api_key_prefix="ms",
     models=MODELSCOPE_MODELS,
+    support_model_discovery=True,
     freeze_url=True,
 )
 
@@ -899,6 +913,7 @@ PROVIDER_DASHSCOPE = DashScopeProvider(
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     api_key_prefix="sk",
     models=DASHSCOPE_MODELS,
+    support_model_discovery=True,
     provider_group="aliyun",
     provider_group_name="Aliyun",
     provider_variant="dashscope",
@@ -1044,6 +1059,7 @@ PROVIDER_OPENAI = OpenAIProvider(
     base_url="https://api.openai.com/v1",
     api_key_prefix="sk-",
     models=OPENAI_MODELS,
+    support_model_discovery=True,
     freeze_url=True,
 )
 
@@ -1054,6 +1070,7 @@ PROVIDER_OPENAI_RESPONSE = OpenAIResponseProvider(
     api_key_prefix="sk-",
     chat_model="OpenAIResponseModel",
     models=OPENAI_MODELS,
+    support_model_discovery=True,
     freeze_url=True,
 )
 
@@ -1124,6 +1141,7 @@ PROVIDER_KIMI_CN = OpenAIProvider(
     base_url="https://api.moonshot.cn/v1",
     api_key_prefix="",
     models=KIMI_MODELS,
+    support_model_discovery=True,
     freeze_url=True,
     provider_group="kimi",
     provider_group_name="Kimi",
@@ -1136,6 +1154,7 @@ PROVIDER_KIMI_INTL = OpenAIProvider(
     base_url="https://api.moonshot.ai/v1",
     api_key_prefix="",
     models=KIMI_MODELS,
+    support_model_discovery=True,
     freeze_url=True,
     provider_group="kimi",
     provider_group_name="Kimi",
@@ -1171,6 +1190,7 @@ PROVIDER_DEEPSEEK = OpenAIProvider(
     base_url="https://api.deepseek.com",
     api_key_prefix="sk-",
     models=DEEPSEEK_MODELS,
+    support_model_discovery=True,
     freeze_url=True,
 )
 
@@ -1181,6 +1201,7 @@ PROVIDER_ANTHROPIC = AnthropicProvider(
     api_key_prefix="sk-ant-",
     models=ANTHROPIC_MODELS,
     chat_model="AnthropicChatModel",
+    support_model_discovery=True,
     freeze_url=False,
 )
 
@@ -1191,6 +1212,7 @@ PROVIDER_GEMINI = GeminiProvider(
     api_key_prefix="",
     models=GEMINI_MODELS,
     chat_model="GeminiChatModel",
+    support_model_discovery=True,
     freeze_url=True,
     meta={
         "is_free_tier": True,
@@ -1213,6 +1235,7 @@ PROVIDER_OPENROUTER = OpenRouterProvider(
     api_key_prefix="sk-or-v1-",
     models=[],
     freeze_url=True,
+    support_model_discovery=True,
     meta={
         "supports_oauth": True,
         "is_free_tier": True,
@@ -1271,6 +1294,7 @@ PROVIDER_SILICONFLOW_CN = OpenAIProvider(
     models=[],
     freeze_url=True,
     require_api_key=True,
+    support_model_discovery=True,
     provider_group="siliconflow",
     provider_group_name="SiliconFlow",
     provider_variant="china",
@@ -1287,6 +1311,7 @@ PROVIDER_SILICONFLOW_INTL = OpenAIProvider(
     models=[],
     freeze_url=True,
     require_api_key=True,
+    support_model_discovery=True,
     provider_group="siliconflow",
     provider_group_name="SiliconFlow",
     provider_variant="international",
@@ -1536,33 +1561,123 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         Returns:
             List of ModelInfo objects representing available models.
         """
+        result = await self.discover_provider_models(provider_id, save=save)
+        return result.models if result.success else []
+
+    @staticmethod
+    def _merge_discovered_model(
+        provider: Provider,
+        remote: ModelInfo,
+        discovered_at: str,
+    ) -> ModelInfo:
+        """Merge fresh API fields over existing non-user model metadata."""
+        base = next(
+            (
+                model
+                for model in provider.discovered_models + provider.models
+                if model.id == remote.id
+            ),
+            None,
+        )
+        payload = base.model_dump() if base is not None else {}
+        config_overrides = set(
+            getattr(base, "config_overrides", []),
+        )
+        for field in remote.model_fields_set:
+            if base is not None and (
+                field in config_overrides
+                or (
+                    base.max_input_length_configured
+                    and field
+                    in {
+                        "max_input_length",
+                        "max_input_length_configured",
+                    }
+                )
+            ):
+                continue
+            payload[field] = getattr(remote, field)
+        payload.update(
+            {
+                "id": remote.id,
+                "name": remote.name or remote.id,
+                "source": "discovered",
+                "discovered_at": discovered_at,
+            },
+        )
+        return ModelInfo.model_validate(payload)
+
+    async def discover_provider_models(
+        self,
+        provider_id: str,
+        *,
+        save: bool = True,
+        timeout: float = 10,
+        provider_override: Provider | None = None,
+    ) -> ProviderModelDiscoveryResult:
+        """Discover, normalize and optionally persist a provider's models.
+
+        A failed refresh never mutates the last successful cache or the
+        user-added model list.
+        """
         provider_id = self._normalize_provider_id(provider_id)
-        provider = self.get_provider(provider_id)
-        if not provider:
-            return []
-        try:
-            models = await provider.fetch_models()
-            if save:
-                provider.extra_models = models
-                # Save provider config to appropriate location
-                is_plugin = provider_id in self.plugin_providers
-                if is_plugin:
-                    provider_info = ProviderInfo(**provider.model_dump())
-                    self.plugin_providers[provider_id]["info"] = provider_info
-                    self._save_plugin_provider(provider)
-                else:
-                    self._save_provider(
-                        provider,
-                        is_builtin=provider_id in self.builtin_providers,
-                    )
-            return models
-        except Exception as e:
-            logger.warning(
-                "Failed to fetch models for provider '%s': %s",
-                provider_id,
-                e,
+        provider = provider_override or self.get_provider(provider_id)
+        if provider is None:
+            return ProviderModelDiscoveryResult(
+                success=False,
+                used_static_fallback=True,
+                error=f"Provider '{provider_id}' not found",
             )
-            return []
+
+        previous_ids = {model.id for model in provider.all_models()}
+        try:
+            fetched = await provider.fetch_models(timeout=timeout)
+            fetched = [model for model in fetched if model.id.strip()]
+            if not fetched:
+                raise ValueError("Provider returned no models")
+
+            synced_at = datetime.now(timezone.utc).isoformat()
+            by_id: dict[str, ModelInfo] = {}
+            for model in fetched:
+                normalized = self._merge_discovered_model(
+                    provider,
+                    model,
+                    synced_at,
+                )
+                by_id.setdefault(normalized.id, normalized)
+            models = list(by_id.values())
+
+            if save:
+                provider.discovered_models = models
+                provider.models_last_synced_at = synced_at
+                provider.models_last_sync_error = None
+                self.save_provider_config(provider_id, provider)
+
+            return ProviderModelDiscoveryResult(
+                success=True,
+                models=models,
+                added_count=sum(
+                    model.id not in previous_ids for model in models
+                ),
+                last_synced_at=synced_at,
+            )
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            logger.warning(
+                "Failed to discover models for provider '%s': %s",
+                provider_id,
+                error,
+            )
+            if save:
+                provider.models_last_sync_error = error
+                self.save_provider_config(provider_id, provider)
+            return ProviderModelDiscoveryResult(
+                success=False,
+                models=provider.all_models(),
+                last_synced_at=provider.models_last_synced_at,
+                used_static_fallback=True,
+                error=error,
+            )
 
     def _resolve_custom_provider_id(self, provider_id: str) -> str:
         """Resolve provider ID conflicts for a custom provider."""
@@ -1604,6 +1719,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         provider = self._provider_from_data(
             provider_payload,
         )  # Validate provider data
+        provider.support_model_discovery = provider.chat_model in {
+            "OpenAIChatModel",
+            "OpenAIResponseModel",
+            "AnthropicChatModel",
+            "GeminiChatModel",
+        }
         # For custom providers, we assume they don't support connection check
         # without model config, to avoid false negatives in the UI.
         provider.support_connection_check = False
@@ -1650,7 +1771,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         """Schedule multimodal probing for a model if capability is unknown."""
         provider = self.get_provider(provider_id)
         # Auto-probe multimodal if not yet probed
-        for model in provider.models + provider.extra_models:
+        for model in provider.all_models():
             if model.id == model_id and model.supports_multimodal is None:
                 asyncio.create_task(
                     self._auto_probe_multimodal(provider_id, model_id),
@@ -1809,7 +1930,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         # Update the model's capability flags.
         # For image_only probes, leave supports_video untouched so a
         # subsequent full probe can fill it in correctly.
-        for model in provider.models + provider.extra_models:
+        for model in provider.all_models():
             if model.id == model_id:
                 model.supports_image = result.supports_image
                 if not image_only:
@@ -2229,6 +2350,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             model.supports_image = config["supports_image"]
         if config.get("supports_video") is not None:
             model.supports_video = config["supports_video"]
+        if config.get("config_overrides") is not None:
+            model.config_overrides = config["config_overrides"]
 
     def _init_from_storage(self):
         """Initialize all providers and active model from disk storage."""
@@ -2257,6 +2380,11 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                     for m in provider.extra_models
                     if m.id not in builtin_model_ids
                 ]
+                builtin.discovered_models = provider.discovered_models
+                builtin.models_last_synced_at = provider.models_last_synced_at
+                builtin.models_last_sync_error = (
+                    provider.models_last_sync_error
+                )
                 builtin.generate_kwargs.update(provider.generate_kwargs)
                 # Restore per-model config for built-in models.
                 # Collect from both stored built-in models and promoted
@@ -2275,6 +2403,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                     "supports_multimodal",
                     "supports_image",
                     "supports_video",
+                    "config_overrides",
                 )
                 for m in provider.models:
                     stored_model_config[m.id] = {
@@ -2316,7 +2445,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
         registry = ExpectedCapabilityRegistry()
         for provider in self.builtin_providers.values():
-            for model in provider.models:
+            for model in provider.all_models():
                 # Already fully annotated (e.g. by a prior probe) → skip
                 if model.supports_multimodal is not None:
                     continue
@@ -2462,12 +2591,25 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 if "extra_models" in saved_config:
                     provider_info.extra_models = [
                         ModelInfo.model_validate(
-                            model.model_dump()
-                            if isinstance(model, BaseModel)
-                            else model,
+                            (
+                                model.model_dump()
+                                if isinstance(model, BaseModel)
+                                else model
+                            ),
                         )
                         for model in saved_config["extra_models"]
                     ]
+                if "discovered_models" in saved_config:
+                    provider_info.discovered_models = [
+                        ModelInfo.model_validate(model)
+                        for model in saved_config["discovered_models"]
+                    ]
+                provider_info.models_last_synced_at = saved_config.get(
+                    "models_last_synced_at",
+                )
+                provider_info.models_last_sync_error = saved_config.get(
+                    "models_last_sync_error",
+                )
                 logger.info(
                     f"✓ Loaded saved config for plugin provider: "
                     f"{provider_id} "

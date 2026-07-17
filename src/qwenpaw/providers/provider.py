@@ -46,6 +46,18 @@ class ModelInfo(BaseModel):
         default=False,
         description="Whether this model is free to use (e.g., no API cost)",
     )
+    source: Literal["builtin", "discovered", "user"] = Field(
+        default="builtin",
+        description="Where the model entry came from.",
+    )
+    discovered_at: str | None = Field(
+        default=None,
+        description="UTC timestamp of the latest successful discovery.",
+    )
+    config_overrides: List[str] = Field(
+        default_factory=list,
+        description="Model fields explicitly changed by the user.",
+    )
     max_tokens: int = Field(
         default=8192,
         ge=1,
@@ -64,6 +76,11 @@ class ModelInfo(BaseModel):
             "Whether max_input_length was explicitly configured. This keeps "
             "an intentional 131072-token override distinct from the default."
         ),
+    )
+    max_input_length_auto_detected: int | None = Field(
+        default=None,
+        ge=1000,
+        description="Context window reported by the provider API.",
     )
     generate_kwargs: Dict[str, Any] = Field(
         default_factory=dict,
@@ -165,7 +182,19 @@ class ProviderInfo(BaseModel):
     )
     extra_models: List[ModelInfo] = Field(
         default_factory=list,
-        description="List of user-added models (not fetched from provider)",
+        description="List of models explicitly added by the user",
+    )
+    discovered_models: List[ModelInfo] = Field(
+        default_factory=list,
+        description="Last model list fetched from the provider API",
+    )
+    models_last_synced_at: str | None = Field(
+        default=None,
+        description="UTC timestamp of the latest successful model sync",
+    )
+    models_last_sync_error: str | None = Field(
+        default=None,
+        description="Most recent model discovery error, if any",
     )
 
     api_key_prefix: str = Field(
@@ -277,6 +306,19 @@ class ProviderInfo(BaseModel):
         "(e.g., api_key_url, api_key_hint).",
     )
 
+    @model_validator(mode="after")
+    def _normalize_model_sources(self) -> "ProviderInfo":
+        """Assign sources to legacy entries that predate source tracking."""
+        for model in self.models:
+            if "source" not in model.model_fields_set:
+                model.source = "builtin"
+        for model in self.discovered_models:
+            model.source = "discovered"
+        for model in self.extra_models:
+            if "source" not in model.model_fields_set:
+                model.source = "user"
+        return self
+
 
 class Provider(ProviderInfo, ABC):
     """Represents a provider instance with its configuration."""
@@ -307,13 +349,14 @@ class Provider(ProviderInfo, ABC):
         model_info.id = model_info.id.strip()
         if any(
             model.id.strip() == model_info.id
-            for model in self.models + self.extra_models
+            for model in Provider.all_models(self)
         ):
             return False, f"Model '{model_info.id}' already exists"
         if target == "extra_models":
-            self.extra_models.append(model_info)
+            model_info.source = "user"
+            self.extra_models.append(model_info)  # pylint: disable=no-member
         elif target == "models":
-            self.models.append(model_info)
+            self.models.append(model_info)  # pylint: disable=no-member
         else:
             return False, f"Invalid target '{target}' for adding model"
         return True, ""
@@ -383,12 +426,36 @@ class Provider(ProviderInfo, ABC):
             # avoid class-identity issues from dual module loading.
             self.extra_models = [
                 ModelInfo.model_validate(
-                    model.model_dump()
-                    if isinstance(model, BaseModel)
-                    else model,
+                    (
+                        model.model_dump()
+                        if isinstance(model, BaseModel)
+                        else model
+                    ),
                 )
                 for model in config["extra_models"]
             ]
+            for model in self.extra_models:
+                model.source = "user"
+
+    def all_models(self) -> List[ModelInfo]:
+        """Return the effective, de-duplicated model list.
+
+        Built-in ordering is retained while API metadata and user-added
+        entries override matching IDs. User entries have the highest
+        precedence.
+        """
+        ordered_ids: list[str] = []
+        by_id: dict[str, ModelInfo] = {}
+        for collection in (
+            getattr(self, "models", []),
+            getattr(self, "discovered_models", []),
+            getattr(self, "extra_models", []),
+        ):
+            for model in collection:
+                if model.id not in by_id:
+                    ordered_ids.append(model.id)
+                by_id[model.id] = model
+        return [by_id[model_id] for model_id in ordered_ids]
 
     def get_chat_model_cls(self) -> Type[ChatModelBase]:
         """Return the chat model class associated with this provider."""
@@ -433,7 +500,7 @@ class Provider(ProviderInfo, ABC):
 
         Always returns a new dict so callers never mutate provider state.
         """
-        for model in self.models + self.extra_models:
+        for model in Provider.all_models(self):
             if model.id == model_id:
                 result = (
                     self._deep_merge(
@@ -454,58 +521,74 @@ class Provider(ProviderInfo, ABC):
         config: Dict,
     ) -> bool:
         """Update per-model configuration (e.g. generate_kwargs)."""
-        for model in self.models + self.extra_models:
+        for model in Provider.all_models(self):
             if model.id == model_id:
+                changed_fields: list[str] = []
                 if (
                     "generate_kwargs" in config
                     and config["generate_kwargs"] is not None
                     and isinstance(config["generate_kwargs"], dict)
                 ):
                     model.generate_kwargs = config["generate_kwargs"]
+                    changed_fields.append("generate_kwargs")
                 if "max_tokens" in config and config["max_tokens"] is not None:
                     model.max_tokens = int(config["max_tokens"])
+                    changed_fields.append("max_tokens")
                 if (
                     "max_input_length" in config
                     and config["max_input_length"] is not None
                 ):
                     model.max_input_length = int(config["max_input_length"])
                     model.max_input_length_configured = True
+                    changed_fields.extend(
+                        ["max_input_length", "max_input_length_configured"],
+                    )
                 if (
                     "relay_reasoning" in config
                     and config["relay_reasoning"] is not None
                 ):
                     model.relay_reasoning = bool(config["relay_reasoning"])
+                    changed_fields.append("relay_reasoning")
                 if "thinking_enabled" in config:
                     model.thinking_enabled = (
                         bool(config["thinking_enabled"])
                         if config["thinking_enabled"] is not None
                         else None
                     )
+                    changed_fields.append("thinking_enabled")
                 if "thinking_budget" in config:
                     model.thinking_budget = (
                         int(config["thinking_budget"])
                         if config["thinking_budget"] is not None
                         else None
                     )
+                    changed_fields.append("thinking_budget")
                 if "reasoning_effort" in config:
                     val = config["reasoning_effort"]
                     model.reasoning_effort = (
                         str(val) if val is not None else None
                     )
+                    changed_fields.append("reasoning_effort")
+                model.config_overrides = list(
+                    dict.fromkeys(model.config_overrides + changed_fields),
+                )
                 return True
         return False
 
     def has_model(self, model_id: str) -> bool:
         """Check if the provider has a model with the given ID."""
-        return any(
-            model.id == model_id for model in self.models + self.extra_models
-        )
+        return self.get_model_info(model_id) is not None
 
     def get_model_info(self, model_id: str) -> ModelInfo | None:
         """Return the ModelInfo for *model_id*, or None."""
-        for model in self.models + self.extra_models:
-            if model.id == model_id:
-                return model
+        for collection in (
+            getattr(self, "extra_models", []),
+            getattr(self, "discovered_models", []),
+            getattr(self, "models", []),
+        ):
+            for model in collection:
+                if model.id == model_id:
+                    return model
         return None
 
     def _get_relay_reasoning(self, model_id: str) -> bool:
@@ -577,6 +660,11 @@ class Provider(ProviderInfo, ABC):
                 else False
             ),
             use_catalog=self._context_catalog_enabled(),
+            auto_detected=(
+                getattr(model_info, "max_input_length_auto_detected", None)
+                if model_info is not None
+                else None
+            ),
         )
 
     def _get_context_size(self, model_id: str) -> int:
@@ -630,6 +718,16 @@ class Provider(ProviderInfo, ABC):
             api_key = prefix_for_mask + "*" * 6
         else:
             api_key = self.api_key
+        # The public ``models`` list remains the effective non-user catalog
+        # for backwards compatibility with existing API consumers. The
+        # separate discovered list preserves provenance and persistence.
+        user_model_ids = {model.id for model in self.extra_models}
+        effective_models = [
+            model
+            for model in Provider.all_models(self)
+            if model.id not in user_model_ids
+        ]
+
         # Serialize models/extra_models to plain dicts so that
         # ProviderInfo constructs fresh ModelInfo instances using
         # the class in its own module scope.  This avoids pydantic
@@ -642,8 +740,11 @@ class Provider(ProviderInfo, ABC):
             base_url=self.base_url,
             api_key=api_key,
             chat_model=self.chat_model,
-            models=[m.model_dump() for m in self.models],
+            models=[m.model_dump() for m in effective_models],
             extra_models=[m.model_dump() for m in self.extra_models],
+            discovered_models=[m.model_dump() for m in self.discovered_models],
+            models_last_synced_at=self.models_last_synced_at,
+            models_last_sync_error=self.models_last_sync_error,
             api_key_prefix=self.api_key_prefix,
             api_key_prefixes=self.api_key_prefixes,
             is_local=self.is_local,

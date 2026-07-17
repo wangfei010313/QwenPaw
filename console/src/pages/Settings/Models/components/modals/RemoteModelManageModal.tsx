@@ -33,6 +33,7 @@ import {
   DatabaseOutlined,
   UserOutlined,
   GiftOutlined,
+  CloudSyncOutlined,
 } from "@ant-design/icons";
 import type {
   ProviderInfo,
@@ -862,13 +863,12 @@ export function RemoteModelManageModal({
     setDiscoveringModels(true);
     try {
       const result = await api.discoverModels(provider.id, undefined, true);
+      await onSaved();
 
       if (!result.success) {
         message.error(result.message || t("models.autoDiscoverModelsFailed"));
         return;
       }
-
-      await onSaved();
 
       if (result.added_count > 0) {
         message.success(
@@ -958,6 +958,29 @@ export function RemoteModelManageModal({
         allowClear
       />
 
+      {supportsAutoDiscover && (
+        <div style={{ marginTop: 8, color: "rgba(127,127,127,0.9)" }}>
+          <CloudSyncOutlined style={{ marginRight: 6 }} />
+          {provider.models_last_synced_at
+            ? t("models.modelsLastSynced", {
+                time: new Date(provider.models_last_synced_at).toLocaleString(),
+                defaultValue: "Last synced: {{time}}",
+              })
+            : t("models.modelsNeverSynced", {
+                defaultValue: "Models have not been synced yet",
+              })}
+          {provider.models_last_sync_error && (
+            <Tooltip title={provider.models_last_sync_error}>
+              <Tag color="error" style={{ marginLeft: 8 }}>
+                {t("models.modelsSyncFailed", {
+                  defaultValue: "Last sync failed",
+                })}
+              </Tag>
+            </Tooltip>
+          )}
+        </div>
+      )}
+
       {/* Model list */}
       <div className={styles.modelList}>
         {filteredModels.length === 0 ? (
@@ -1006,7 +1029,13 @@ export function RemoteModelManageModal({
                             style={{ fontSize: 10, marginRight: 3 }}
                           />
                         )}
-                        {t(isDeletable ? "models.userAdded" : "models.builtin")}
+                        {t(
+                          isDeletable
+                            ? "models.userAdded"
+                            : m.source === "discovered"
+                            ? "models.discovered"
+                            : "models.builtin",
+                        )}
                       </Tag>
                       <span
                         style={{

@@ -207,7 +207,16 @@ class GeminiProvider(Provider):
             if not display_name or display_name.startswith("models/"):
                 display_name = model_id
 
-            models.append(ModelInfo(id=model_id, name=display_name))
+            metadata: dict[str, int] = {}
+            input_limit = getattr(row, "input_token_limit", None)
+            if isinstance(input_limit, (int, float)) and input_limit >= 1000:
+                metadata["max_input_length_auto_detected"] = int(input_limit)
+            output_limit = getattr(row, "output_token_limit", None)
+            if isinstance(output_limit, (int, float)) and output_limit > 0:
+                metadata["max_tokens"] = int(output_limit)
+            models.append(
+                ModelInfo(id=model_id, name=display_name, **metadata),
+            )
 
         deduped: List[ModelInfo] = []
         seen: set[str] = set()
@@ -567,9 +576,9 @@ class _GeminiChatModelCompat:
                     formatted = await self.formatter.format(messages)
                     config: dict[str, Any] = {**merged}
                     if self.parameters.max_tokens is not None:
-                        config[
-                            "max_output_tokens"
-                        ] = self.parameters.max_tokens
+                        config["max_output_tokens"] = (
+                            self.parameters.max_tokens
+                        )
                     if self.parameters.temperature is not None:
                         config["temperature"] = self.parameters.temperature
                     if self.parameters.top_p is not None:

@@ -6,9 +6,13 @@ export interface ModelInfo {
   supports_video: boolean | null;
   probe_source?: string | null;
   is_free?: boolean;
+  source?: "builtin" | "discovered" | "user";
+  discovered_at?: string | null;
+  config_overrides?: string[];
   max_tokens: number;
   max_input_length: number;
   max_input_length_configured?: boolean;
+  max_input_length_auto_detected?: number | null;
   generate_kwargs: Record<string, unknown>;
   relay_reasoning: boolean;
   thinking_enabled: boolean | null;
@@ -31,6 +35,10 @@ export interface ProviderInfo {
   models: ModelInfo[];
   /** User-added models (deletable). Only populated for built-in providers. */
   extra_models: ModelInfo[];
+  /** Last successful model catalog fetched from the provider API. */
+  discovered_models?: ModelInfo[];
+  models_last_synced_at?: string | null;
+  models_last_sync_error?: string | null;
   is_custom: boolean;
   is_local: boolean;
   /** Whether this provider supports fetching available models from the provider's API. */
@@ -85,6 +93,7 @@ export interface ProviderConfigRequest {
   generate_kwargs?: Record<string, unknown>;
   custom_headers?: Record<string, string>;
   auth_mode?: "api_key" | "auth_token";
+  auto_discover?: boolean;
 }
 
 export interface ModelSlotConfig {
@@ -231,6 +240,8 @@ export interface DiscoverModelsResponse {
   message: string;
   models: ModelInfo[];
   added_count: number;
+  last_synced_at?: string | null;
+  used_static_fallback?: boolean;
 }
 
 export interface ProbeMultimodalResponse {

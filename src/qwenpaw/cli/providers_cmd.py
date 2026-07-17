@@ -267,8 +267,7 @@ def _add_models_interactive(provider_id: str) -> None:
     if provider_id == "ollama":
         return
 
-    extra = list(defn.extra_models)
-    all_models = list(defn.models) + extra
+    all_models = defn.all_models()
 
     if all_models:
         click.echo(f"\nCurrent models for {defn.name}:")
@@ -337,8 +336,7 @@ def _select_llm_model(defn, pid, current_slot, *, use_defaults):
         else ""
     )
 
-    extra = list(defn.extra_models)
-    all_models = list(defn.models) + extra
+    all_models = defn.all_models()
 
     if use_defaults:
         return cur or (all_models[0].id if all_models else "")
@@ -530,8 +528,7 @@ def list_cmd() -> None:
                     f"  {'api_key_prefix':16s}: {', '.join(prefixes)}",
                 )
 
-            extra = list(defn.extra_models)
-            all_models = list(defn.models) + extra
+            all_models = defn.all_models()
             if all_models:
                 click.echo(f"  {'models':16s}:")
                 extra_ids = {m.id for m in extra}

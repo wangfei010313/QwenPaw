@@ -22,6 +22,7 @@ from qwenpaw.providers.openai_provider import (
     GitHubModelsProvider,
     OpenAIProvider,
 )
+from qwenpaw.providers.openrouter_provider import OpenRouterProvider
 from qwenpaw.providers.provider import ModelInfo, ProviderInfo
 from qwenpaw.providers.provider_manager import ProviderManager
 
@@ -144,6 +145,7 @@ async def test_add_custom_provider_and_reload_from_storage(
     )
 
     created = await manager.add_custom_provider(custom)
+    assert created.support_model_discovery is True
     builtin_conflict = await manager.add_custom_provider(
         OpenAIProvider(
             id="openai",
@@ -499,6 +501,202 @@ def test_update_provider_for_unknown_returns_false(
     ok = manager.update_provider("unknown-provider", {"api_key": "sk-x"})
 
     assert ok is False
+
+
+async def test_discovery_keeps_user_models_and_persists_cache(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = []
+    provider.extra_models = [
+        ModelInfo(id="user-only", name="User Only", source="user"),
+    ]
+
+    async def fetch_models(_self, timeout=5):
+        assert timeout == 10
+        return [
+            ModelInfo(
+                id="remote-new",
+                name="Remote New",
+                max_input_length_auto_detected=256_000,
+            ),
+        ]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is True
+    assert result.added_count == 1
+    assert result.last_synced_at
+    assert [model.id for model in provider.extra_models] == ["user-only"]
+    assert [model.id for model in provider.discovered_models] == [
+        "remote-new",
+    ]
+    assert provider.discovered_models[0].source == "discovered"
+    assert provider.get_context_size("remote-new") == 256_000
+
+    reloaded = ProviderManager().get_provider("openai")
+    assert reloaded is not None
+    assert reloaded.has_model("user-only")
+    assert reloaded.has_model("remote-new")
+    assert reloaded.models_last_synced_at == result.last_synced_at
+
+
+async def test_failed_discovery_preserves_last_cache_and_user_models(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = []
+    provider.discovered_models = [
+        ModelInfo(
+            id="cached-remote",
+            name="Cached Remote",
+            source="discovered",
+        ),
+    ]
+    provider.extra_models = [
+        ModelInfo(id="user-only", name="User Only", source="user"),
+    ]
+
+    async def fetch_models(_self, timeout=5):
+        raise TimeoutError("model discovery timed out")
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is False
+    assert result.used_static_fallback is True
+    assert result.error == "model discovery timed out"
+    assert provider.models_last_sync_error == result.error
+    assert [model.id for model in provider.discovered_models] == [
+        "cached-remote",
+    ]
+    assert [model.id for model in provider.extra_models] == ["user-only"]
+    assert {model.id for model in result.models} >= {
+        "cached-remote",
+        "user-only",
+    }
+
+
+async def test_discovery_deduplicates_and_preserves_builtin_metadata(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = []
+    builtin = provider.models[0]
+    builtin.supports_image = True
+
+    async def fetch_models(_self, timeout=5):
+        return [
+            ModelInfo(id=builtin.id, name="Remote Name"),
+            ModelInfo(id=builtin.id, name="Duplicate"),
+        ]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai", save=False)
+
+    assert result.success is True
+    assert len(result.models) == 1
+    assert result.models[0].name == "Remote Name"
+    assert result.models[0].supports_image is True
+    assert provider.discovered_models == []
+
+
+async def test_discovery_preserves_explicit_context_override(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openrouter")
+    assert provider is not None
+    provider.discovered_models = [
+        ModelInfo(
+            id="vendor/model",
+            name="Configured Model",
+            source="discovered",
+            max_input_length=64_000,
+            max_input_length_configured=True,
+        ),
+    ]
+
+    async def fetch_models(_self, timeout=5):
+        return [
+            ModelInfo(
+                id="vendor/model",
+                name="Remote Model",
+                max_input_length=1_000_000,
+                max_input_length_auto_detected=1_000_000,
+            ),
+        ]
+
+    monkeypatch.setattr(OpenRouterProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openrouter")
+
+    assert result.success is True
+    model = provider.get_model_info("vendor/model")
+    assert model is not None
+    assert model.max_input_length == 64_000
+    assert model.max_input_length_configured is True
+    assert model.max_input_length_auto_detected == 1_000_000
+    assert provider.get_context_size("vendor/model") == 64_000
+
+
+async def test_discovery_preserves_model_config_overrides(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = [
+        ModelInfo(
+            id="remote-model",
+            name="Remote Model",
+            source="discovered",
+        ),
+    ]
+    assert provider.update_model_config(
+        "remote-model",
+        {
+            "max_tokens": 1234,
+            "generate_kwargs": {"temperature": 0.2},
+        },
+    )
+
+    async def fetch_models(_self, timeout=5):
+        return [
+            ModelInfo(
+                id="remote-model",
+                name="Updated Remote Model",
+                max_tokens=8192,
+                generate_kwargs={"temperature": 1},
+            ),
+        ]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is True
+    model = provider.get_model_info("remote-model")
+    assert model is not None
+    assert model.name == "Updated Remote Model"
+    assert model.max_tokens == 1234
+    assert model.generate_kwargs == {"temperature": 0.2}
+    assert set(model.config_overrides) >= {"max_tokens", "generate_kwargs"}
 
 
 async def test_activate_provider_invalid_provider_raises(

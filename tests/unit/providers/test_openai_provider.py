@@ -60,7 +60,12 @@ async def test_check_connection_api_error_returns_false(monkeypatch) -> None:
 async def test_list_model_normalizes_and_deduplicates(monkeypatch) -> None:
     provider = _make_provider()
     rows = [
-        SimpleNamespace(id="gpt-4o-mini", name="GPT-4o Mini"),
+        SimpleNamespace(
+            id="gpt-4o-mini",
+            name="GPT-4o Mini",
+            context_length=128_000,
+            max_output_tokens=16_384,
+        ),
         SimpleNamespace(id="gpt-4o-mini", name="dup"),
         SimpleNamespace(id="gpt-4.1", name=""),
         SimpleNamespace(id="   ", name="invalid"),
@@ -78,6 +83,8 @@ async def test_list_model_normalizes_and_deduplicates(monkeypatch) -> None:
 
     assert [m.id for m in models] == ["gpt-4o-mini", "gpt-4.1"]
     assert [m.name for m in models] == ["GPT-4o Mini", "gpt-4.1"]
+    assert models[0].max_input_length_auto_detected == 128_000
+    assert models[0].max_tokens == 16_384
     assert not provider.models  # should not update provider state
 
 
