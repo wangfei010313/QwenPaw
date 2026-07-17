@@ -64,6 +64,53 @@ class OllamaProvider(OpenAIProvider):
             return True, ""
         return False, f"Model '{model_id}' not found"
 
+    async def fetch_model_context_from_api(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> int | None:
+        """Fetch model context window from Ollama /api/show endpoint.
+
+        Args:
+            model_id: Model identifier to probe.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Context window size in tokens (num_ctx), or None if unavailable.
+        """
+        import httpx
+
+        try:
+            url = f"{self.base_url}/api/show"
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    json={"name": model_id},
+                )
+                response.raise_for_status()
+                data = response.json()
+                # Ollama returns model info with model_info containing num_ctx
+                model_info = data.get("model_info", {})
+                num_ctx = model_info.get("num_ctx")
+                if isinstance(num_ctx, (int, float)) and num_ctx > 0:
+                    return int(num_ctx)
+                # Fallback: check parameters for num_ctx
+                parameters = data.get("parameters", "")
+                if "num_ctx" in parameters:
+                    # Parse "num_ctx 4096" format
+                    for line in parameters.split("\n"):
+                        if "num_ctx" in line:
+                            parts = line.split()
+                            for i, part in enumerate(parts):
+                                if part == "num_ctx" and i + 1 < len(parts):
+                                    try:
+                                        return int(parts[i + 1])
+                                    except (ValueError, IndexError):
+                                        pass
+                return None
+        except Exception:
+            return None
+
     def _context_catalog_enabled(self) -> bool:
         """Ollama serves models locally: the family's cloud window does not
         apply (a local ``qwen3-coder:30b`` truncates at ``num_ctx``, not at

@@ -121,6 +121,7 @@ def resolve_context_window(
     configured: int | None = None,
     configured_is_explicit: bool = False,
     use_catalog: bool = True,
+    auto_detected: int | None = None,
 ) -> int:
     """Resolve a model's input-context window. The single entry point.
 
@@ -130,11 +131,16 @@ def resolve_context_window(
     existing provider data, any non-default configured value also wins. The
     static catalog answers otherwise, unless ``use_catalog`` is False
     (local-serving providers). Everything else falls back to the default.
+    
+    ``auto_detected`` is the value from API auto-detection (if available).
+    Priority: explicit user config > auto-detected > catalog > default.
     """
     if configured is not None and (
         configured_is_explicit or configured != DEFAULT_CONTEXT_WINDOW
     ):
         return configured
+    if auto_detected is not None and auto_detected > 0:
+        return auto_detected
     if use_catalog:
         known = known_context_size(model_id)
         if known is not None:

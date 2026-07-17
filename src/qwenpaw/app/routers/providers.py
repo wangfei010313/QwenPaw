@@ -352,6 +352,22 @@ class DiscoverModelsResponse(BaseModel):
     )
 
 
+class DetectContextWindowRequest(BaseModel):
+    model_id: str = Field(..., description="Model ID to detect")
+
+
+class DetectContextWindowResponse(BaseModel):
+    success: bool = Field(..., description="Whether detection succeeded")
+    context_window: Optional[int] = Field(
+        default=None,
+        description="Detected context window size in tokens",
+    )
+    message: str = Field(
+        default="",
+        description="Human-readable result message",
+    )
+
+
 @router.post(
     "/{provider_id}/test",
     response_model=TestConnectionResponse,
@@ -479,6 +495,48 @@ async def test_model(
         )
     except (ValueError, AppBaseException) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{provider_id}/detect-context-window",
+    response_model=DetectContextWindowResponse,
+    summary="Detect model context window via API",
+)
+async def detect_context_window(
+    manager: ProviderManager = Depends(get_provider_manager),
+    provider_id: str = Path(...),
+    body: DetectContextWindowRequest = Body(...),
+) -> DetectContextWindowResponse:
+    """Detect model context window size by calling provider API."""
+    try:
+        provider = manager.get_provider(provider_id)
+        if provider is None:
+            raise ValueError(f"Provider '{provider_id}' not found")
+        
+        context_window = await provider.fetch_model_context_from_api(
+            model_id=body.model_id
+        )
+        
+        if context_window is not None:
+            return DetectContextWindowResponse(
+                success=True,
+                context_window=context_window,
+                message=f"Detected context window: {context_window} tokens",
+            )
+        else:
+            return DetectContextWindowResponse(
+                success=False,
+                context_window=None,
+                message="Could not detect context window from API",
+            )
+    except (ValueError, AppBaseException) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        return DetectContextWindowResponse(
+            success=False,
+            context_window=None,
+            message=f"Detection failed: {str(exc)}",
+        )
 
 
 @router.delete(

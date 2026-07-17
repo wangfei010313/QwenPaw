@@ -65,6 +65,12 @@ class ModelInfo(BaseModel):
             "an intentional 131072-token override distinct from the default."
         ),
     )
+    max_input_length_auto_detected: int | None = Field(
+        default=None,
+        ge=1000,
+        description="Auto-detected context window size from provider API. "
+        "Used when max_input_length is not explicitly configured.",
+    )
     generate_kwargs: Dict[str, Any] = Field(
         default_factory=dict,
         description="Per-model generation parameters that override "
@@ -562,7 +568,7 @@ class Provider(ProviderInfo, ABC):
         method so the reported usage%% and the compaction trigger never
         diverge. Resolution lives in
         :func:`.context_windows.resolve_context_window`:
-        explicitly configured ``max_input_length`` > static catalog (unless
+        explicitly configured ``max_input_length`` > auto-detected > static catalog (unless
         :meth:`_context_catalog_enabled` opts out) > 128k default.
         """
         model_info = self.get_model_info(model_id)
@@ -577,6 +583,11 @@ class Provider(ProviderInfo, ABC):
                 else False
             ),
             use_catalog=self._context_catalog_enabled(),
+            auto_detected=(
+                getattr(model_info, "max_input_length_auto_detected", None)
+                if model_info is not None
+                else None
+            ),
         )
 
     def _get_context_size(self, model_id: str) -> int:
@@ -610,6 +621,25 @@ class Provider(ProviderInfo, ABC):
         from .multimodal_prober import ProbeResult
 
         return ProbeResult()
+
+    async def fetch_model_context_from_api(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> int | None:
+        """Fetch model context window size from provider API.
+
+        Default implementation uses OpenAI-compatible /v1/models endpoint.
+        Subclasses override for provider-specific APIs.
+
+        Args:
+            model_id: Model identifier to probe.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Context window size in tokens, or None if unavailable.
+        """
+        return None
 
     async def get_info(self, mock_secret: bool = True) -> ProviderInfo:
         """Return a ProviderInfo instance with the provider's details."""

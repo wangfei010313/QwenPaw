@@ -115,6 +115,35 @@ class OpenAIProvider(Provider):
             deduped.append(model)
         return deduped
 
+    async def fetch_model_context_from_api(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> int | None:
+        """Fetch model context window from OpenAI-compatible /v1/models API.
+
+        Args:
+            model_id: Model identifier to probe.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Context window size in tokens, or None if unavailable.
+        """
+        try:
+            client = self._client(timeout=timeout)
+            payload = await client.models.list(timeout=timeout)
+            for row in getattr(payload, "data", []) or []:
+                if str(getattr(row, "id", "")) != model_id:
+                    continue
+                # Try common field names for context window
+                for field in ("context_length", "max_model_len", "max_context_length"):
+                    ctx_len = getattr(row, field, None)
+                    if isinstance(ctx_len, (int, float)) and ctx_len > 0:
+                        return int(ctx_len)
+            return None
+        except Exception:
+            return None
+
     async def check_connection(self, timeout: float = 5) -> tuple[bool, str]:
         """Check if OpenAI provider is reachable with current configuration."""
         client = self._client()

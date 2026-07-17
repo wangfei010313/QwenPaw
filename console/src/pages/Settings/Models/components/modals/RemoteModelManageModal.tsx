@@ -87,6 +87,7 @@ function ModelConfigEditor({
     model.max_input_length ?? 131072,
   );
   const [maxInputLengthDirty, setMaxInputLengthDirty] = useState(false);
+  const [detectingContext, setDetectingContext] = useState(false);
   const [relayReasoning, setRelayReasoning] = useState<boolean>(
     model.relay_reasoning ?? true,
   );
@@ -149,6 +150,35 @@ function ModelConfigEditor({
     setMaxInputLengthDirty(true);
     setDirty(true);
   }, []);
+
+  const handleDetectContextWindow = async () => {
+    setDetectingContext(true);
+    try {
+      const result = await api.detectContextWindow(providerId, model.id);
+      if (result.success && result.context_window) {
+        setMaxInputLength(result.context_window);
+        setMaxInputLengthDirty(true);
+        setDirty(true);
+        message.success(
+          t("models.contextWindowDetected", {
+            value: result.context_window,
+          }),
+        );
+      } else {
+        message.warning(
+          result.message || t("models.contextWindowDetectionFailed"),
+        );
+      }
+    } catch (error) {
+      const errMsg =
+        error instanceof Error
+          ? error.message
+          : t("models.contextWindowDetectionFailed");
+      message.error(errMsg);
+    } finally {
+      setDetectingContext(false);
+    }
+  };
 
   const handleSave = async () => {
     const trimmed = text.trim();
@@ -232,14 +262,25 @@ function ModelConfigEditor({
           <div style={labelStyle}>
             {t("models.maxInputLengthLabel", "Max Context Length")}
           </div>
-          <InputNumber
-            style={{ width: "100%" }}
-            min={1000}
-            step={1024}
-            value={maxInputLength}
-            placeholder="131072"
-            onChange={handleMaxInputLengthChange}
-          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <InputNumber
+              style={{ flex: 1 }}
+              min={1000}
+              step={1024}
+              value={maxInputLength}
+              placeholder="131072"
+              onChange={handleMaxInputLengthChange}
+            />
+            <Tooltip title={t("models.autoDetectContextWindow", "自动探测")}>
+              <Button
+                size="small"
+                loading={detectingContext}
+                onClick={handleDetectContextWindow}
+              >
+                Auto
+              </Button>
+            </Tooltip>
+          </div>
           <div
             style={{
               fontSize: 11,

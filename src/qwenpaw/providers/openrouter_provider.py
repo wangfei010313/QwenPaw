@@ -219,6 +219,34 @@ class OpenRouterProvider(Provider):
 
         return list(models.values())
 
+    async def fetch_model_context_from_api(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> int | None:
+        """Fetch model context window from OpenRouter API.
+
+        Args:
+            model_id: Model identifier to probe.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Context window size in tokens, or None if unavailable.
+        """
+        try:
+            client = self._client(timeout=timeout)
+            payload = await client.models.list(timeout=timeout)
+            for row in getattr(payload, "data", []) or []:
+                if str(getattr(row, "id", "")) != model_id:
+                    continue
+                # OpenRouter provides context_length field
+                context_length = getattr(row, "context_length", None)
+                if isinstance(context_length, (int, float)) and context_length > 0:
+                    return int(context_length)
+            return None
+        except Exception:
+            return None
+
     async def check_connection(self, timeout: float = 30) -> tuple[bool, str]:
         """Check if OpenRouter provider is reachable."""
         client = self._client()

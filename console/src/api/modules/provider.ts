@@ -173,6 +173,15 @@ export const providerApi = {
       { method: "POST" },
     ),
 
+  detectContextWindow: (providerId: string, modelId: string) =>
+    request<{ success: boolean; context_window: number | null; message: string }>(
+      `/models/${encodeURIComponent(providerId)}/detect-context-window`,
+      {
+        method: "POST",
+        body: JSON.stringify({ model_id: modelId }),
+      },
+    ),
+
   /* ---- OpenRouter specific endpoints ---- */
 
   getOpenRouterSeries: () =>

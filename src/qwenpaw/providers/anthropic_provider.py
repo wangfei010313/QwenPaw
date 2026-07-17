@@ -146,6 +146,31 @@ class AnthropicProvider(Provider):
             deduped.append(model)
         return deduped
 
+    async def fetch_model_context_from_api(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> int | None:
+        """Fetch model context window from Anthropic API.
+
+        Args:
+            model_id: Model identifier to probe.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Context window size in tokens, or None if unavailable.
+        """
+        try:
+            client = self._client(timeout=timeout)
+            model = await client.models.retrieve(model_id)
+            # Anthropic API returns model info with context_window field
+            context_window = getattr(model, "context_window", None)
+            if isinstance(context_window, (int, float)) and context_window > 0:
+                return int(context_window)
+            return None
+        except Exception:
+            return None
+
     async def check_connection(self, timeout: float = 5) -> tuple[bool, str]:
         """Check if Anthropic provider is reachable.
 

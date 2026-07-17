@@ -218,6 +218,36 @@ class GeminiProvider(Provider):
             deduped.append(model)
         return deduped
 
+    async def fetch_model_context_from_api(
+        self,
+        model_id: str,
+        timeout: float = 10,
+    ) -> int | None:
+        """Fetch model context window from Google Gemini API.
+
+        Args:
+            model_id: Model identifier to probe.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Context window size in tokens, or None if unavailable.
+        """
+        try:
+            client = self._client(timeout=timeout)
+            # Gemini API model names may need "models/" prefix
+            model_name = model_id
+            if not model_name.startswith("models/"):
+                model_name = f"models/{model_id}"
+            
+            model = await client.aio.models.get(name=model_name)
+            # Gemini API returns input_token_limit for context window
+            input_limit = getattr(model, "input_token_limit", None)
+            if isinstance(input_limit, (int, float)) and input_limit > 0:
+                return int(input_limit)
+            return None
+        except Exception:
+            return None
+
     async def check_connection(self, timeout: float = 10) -> tuple[bool, str]:
         """Check if Google Gemini provider is reachable."""
         try:
