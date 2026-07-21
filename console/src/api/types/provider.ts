@@ -1,3 +1,12 @@
+export type ModelAvailabilityStatus =
+  | "available"
+  | "permission_denied"
+  | "model_not_found"
+  | "incompatible_api"
+  | "rate_limited"
+  | "transient_error"
+  | "unverified";
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -8,6 +17,13 @@ export interface ModelInfo {
   is_free?: boolean;
   source?: "builtin" | "discovered" | "user";
   discovered_at?: string | null;
+  discovery_origin?: "api" | "catalog" | "both" | null;
+  availability_status?: ModelAvailabilityStatus;
+  availability_message?: string | null;
+  availability_http_status?: number | null;
+  availability_retryable?: boolean;
+  availability_checked_at?: string | null;
+  supports_tool_calling?: boolean | null;
   config_overrides?: string[];
   max_tokens: number;
   max_input_length: number;
@@ -219,6 +235,10 @@ export interface StartLocalServerRequest {
 export interface TestConnectionResponse {
   success: boolean;
   message: string;
+  status?: ModelAvailabilityStatus;
+  http_status?: number | null;
+  retryable?: boolean;
+  checked_at?: string | null;
 }
 
 export interface TestProviderRequest {
@@ -254,14 +274,9 @@ export interface ProbeMultimodalResponse {
 
 /* ---- OpenRouter extended model types ---- */
 
-export interface ExtendedModelInfo {
+export interface ExtendedModelInfo extends Partial<ModelInfo> {
   id: string;
   name: string;
-  supports_multimodal?: boolean | null;
-  supports_image?: boolean | null;
-  supports_video?: boolean | null;
-  probe_source?: string | null;
-  is_free?: boolean;
   provider: string;
   input_modalities: string[];
   output_modalities: string[];

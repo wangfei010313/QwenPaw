@@ -605,7 +605,8 @@ export function RemoteModelManageModal({
   const [showFilters, setShowFilters] = useState(false);
   const [availableSeries, setAvailableSeries] = useState<string[]>([]);
   const [discoveredModels, setDiscoveredModels] = useState<ExtendedModelInfo[]>(
-    [],
+    () =>
+      (provider.discovered_models ?? []) as unknown as ExtendedModelInfo[],
   );
   const [selectedSeries, setSelectedSeries] = useState<string[]>([]);
   const [selectedInputModalities, setSelectedInputModalities] = useState<
@@ -614,7 +615,6 @@ export function RemoteModelManageModal({
   const [showFreeOnly, setShowFreeOnly] = useState(false);
   const [loadingFilters, setLoadingFilters] = useState(false);
 
-  const [loadingDiscoveredModels, setLoadingDiscoveredModels] = useState(false);
   const PAGE_SIZE = 30;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
@@ -657,6 +657,20 @@ export function RemoteModelManageModal({
         const failureDetail =
           getTestConnectionFailureDetail(testResult.message) ||
           t("models.modelTestFailed");
+        const cannotAddByStatus = [
+          "permission_denied",
+          "model_not_found",
+          "incompatible_api",
+        ].includes(testResult.status ?? "");
+        const cannotAdd =
+          cannotAddByStatus ||
+          /product is not activated|product.*not enabled|model.*not found|unsupported model/i.test(
+            failureDetail,
+          );
+        if (cannotAdd) {
+          message.error(failureDetail);
+          return;
+        }
         Modal.confirm({
           title: t("models.testConnectionFailed"),
           content: t("models.modelTestFailedConfirm", {
@@ -897,22 +911,10 @@ export function RemoteModelManageModal({
   };
 
   useEffect(() => {
-    if (!adding) {
-      setDiscoveredModels([]);
-      return;
-    }
-    setLoadingDiscoveredModels(true);
-    api
-      .discoverModels(provider.id, undefined, false)
-      .then((result) => {
-        const sorted = result.models
-          .slice()
-          .sort((a, b) => a.id.localeCompare(b.id));
-        setDiscoveredModels(sorted as unknown as ExtendedModelInfo[]);
-      })
-      .catch(() => setDiscoveredModels([]))
-      .finally(() => setLoadingDiscoveredModels(false));
-  }, [adding, provider.id]);
+    setDiscoveredModels(
+      (provider.discovered_models ?? []) as unknown as ExtendedModelInfo[],
+    );
+  }, [provider.discovered_models]);
 
   useEffect(() => {
     if (!isOpenRouter || !adding) return;
@@ -921,6 +923,59 @@ export function RemoteModelManageModal({
   }, [adding, form, isOpenRouter]);
 
   const deferredSearchQuery = useDeferredValue(modelSearchQuery);
+
+  const configuredModelIds = useMemo(
+    () =>
+      new Set(
+        [...(provider.models ?? []), ...(provider.extra_models ?? [])].map(
+          (model) => model.id.trim(),
+        ),
+      ),
+    [provider.models, provider.extra_models],
+  );
+
+  const discoveredModelOptions = useMemo(
+    () =>
+      discoveredModels.map((model) => {
+        const originLabels = {
+          api: t("models.discoveryOriginApi", "API detected"),
+          catalog: t("models.discoveryOriginCatalog", "Official catalog"),
+          both: t("models.discoveryOriginBoth", "API + catalog"),
+        };
+        const statusLabels = {
+          available: t("models.availabilityAvailable", "Available"),
+          permission_denied: t(
+            "models.availabilityPermissionDenied",
+            "No permission",
+          ),
+          model_not_found: t("models.availabilityNotFound", "Not found"),
+          incompatible_api: t(
+            "models.availabilityIncompatible",
+            "Not chat compatible",
+          ),
+          rate_limited: t("models.availabilityRateLimited", "Rate limited"),
+          transient_error: t(
+            "models.availabilityTransientError",
+            "Temporarily unavailable",
+          ),
+          unverified: t("models.availabilityUnverified", "Unverified"),
+        };
+        const origin = model.discovery_origin
+          ? originLabels[model.discovery_origin]
+          : originLabels.api;
+        const status = statusLabels[model.availability_status ?? "unverified"];
+        const configured = configuredModelIds.has(model.id.trim());
+        const configuredLabel = configured
+          ? ` · ${t("models.modelAlreadyConfigured", "Configured")}`
+          : "";
+        return {
+          value: model.id,
+          label: `${model.id} · ${origin} · ${status}${configuredLabel}`,
+          disabled: configured,
+        };
+      }),
+    [configuredModelIds, discoveredModels, t],
+  );
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
@@ -1196,10 +1251,7 @@ export function RemoteModelManageModal({
               >
                 <AutoComplete
                   placeholder={t("models.modelIdPlaceholder")}
-                  options={discoveredModels.map((model) => ({
-                    value: model.id,
-                    label: model.id,
-                  }))}
+                  options={discoveredModelOptions}
                   filterOption={(
                     inputValue: string,
                     option?: { value?: string },
@@ -1209,9 +1261,7 @@ export function RemoteModelManageModal({
                       .includes(inputValue.toLowerCase()) ?? false
                   }
                   notFoundContent={
-                    loadingDiscoveredModels
-                      ? t("common.loading")
-                      : t("models.modelDiscoveryUnavailableHint")
+                    t("models.modelDiscoveryUnavailableHint")
                   }
                 >
                   <Input />

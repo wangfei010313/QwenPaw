@@ -740,6 +740,158 @@ async def test_add_model_to_provider_duplicate_id_raises(
     ) == 1
 
 
+async def test_add_discovered_model_copies_catalog_metadata(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    original = manager.get_provider("openai")
+    assert original is not None
+    original.discovered_models = [
+        ModelInfo(
+            id="remote-candidate",
+            name="Remote Candidate",
+            source="discovered",
+            max_input_length_auto_detected=256_000,
+            max_tokens=16_384,
+            is_free=True,
+        ),
+    ]
+
+    info = await manager.add_model_to_provider(
+        "openai",
+        ModelInfo(id="remote-candidate", name="Remote Candidate"),
+    )
+
+    assert all(model.id != "remote-candidate" for model in info.models)
+    added = next(
+        model for model in info.extra_models if model.id == "remote-candidate"
+    )
+    assert added.source == "user"
+    assert added.max_input_length_auto_detected == 256_000
+    assert added.max_tokens == 16_384
+    assert added.is_free is True
+
+
+def test_model_check_classification() -> None:
+    manager = ProviderManager.__new__(ProviderManager)
+
+    denied = manager._classify_model_check(
+        False,
+        "API error (status=401): unauthorized",
+    )
+    assert denied.status == "permission_denied"
+    assert denied.http_status == 401
+    assert denied.retryable is False
+
+    missing = manager._classify_model_check(
+        False,
+        "API error (status=404): model not found",
+    )
+    assert missing.status == "model_not_found"
+    assert missing.retryable is False
+
+    limited = manager._classify_model_check(
+        False,
+        "HTTP 429 rate limit exceeded",
+    )
+    assert limited.status == "rate_limited"
+    assert limited.retryable is True
+
+    temporary = manager._classify_model_check(False, "request timed out")
+    assert temporary.status == "transient_error"
+    assert temporary.retryable is True
+
+    no_tools = manager._classify_model_check(
+        False,
+        "status=400: The tool call is not supported",
+    )
+    assert no_tools.status == "incompatible_api"
+    assert no_tools.retryable is False
+
+
+def test_legacy_available_model_requires_new_tool_check() -> None:
+    model = ModelInfo.model_validate(
+        {
+            "id": "legacy-model",
+            "name": "Legacy Model",
+            "availability_status": "available",
+        },
+    )
+    assert model.availability_status == "unverified"
+    assert model.supports_tool_calling is None
+
+
+async def test_kimi_discovery_merges_api_and_catalog(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("kimi-cn")
+    assert provider is not None
+    provider.discovered_models = []
+
+    async def fetch_models(_self, timeout=5):
+        _ = timeout
+        return [
+            ModelInfo(id="kimi-k2.6", name="Kimi K2.6"),
+            ModelInfo(id="kimi-k2.5", name="Kimi K2.5"),
+        ]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+    result = await manager.discover_provider_models("kimi-cn", save=False)
+
+    by_id = {model.id: model for model in result.models}
+    assert by_id["kimi-k2.6"].discovery_origin == "api"
+    assert by_id["kimi-k2.5"].discovery_origin == "both"
+    assert by_id["kimi-k2-thinking"].discovery_origin == "catalog"
+    assert result.added_count == 2
+
+
+async def test_rejects_unavailable_discovered_model(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = [
+        ModelInfo(
+            id="forbidden-model",
+            name="Forbidden Model",
+            source="discovered",
+            availability_status="permission_denied",
+            availability_message="status=401: unauthorized",
+            availability_retryable=False,
+        ),
+    ]
+
+    with pytest.raises(ProviderError, match="cannot be added"):
+        await manager.add_model_to_provider(
+            "openai",
+            ModelInfo(id="forbidden-model", name="Forbidden Model"),
+        )
+
+
+async def test_rejects_activation_of_incompatible_model(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.extra_models = [
+        ModelInfo(
+            id="chat-only-model",
+            name="Chat Only Model",
+            source="user",
+            availability_status="incompatible_api",
+            availability_message="The tool call is not supported",
+            availability_retryable=False,
+        ),
+    ]
+
+    with pytest.raises(ProviderError, match="cannot be activated"):
+        await manager.activate_model("openai", "chat-only-model")
+
+
 def test_save_provider_skip_if_exists_does_not_overwrite(
     isolated_secret_dir,
 ) -> None:

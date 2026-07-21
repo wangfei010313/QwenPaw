@@ -168,15 +168,20 @@ class OpenAIProvider(Provider):
         model_id: str,
         timeout: float = 5,
     ) -> tuple[bool, str]:
-        """Check if a specific model is reachable/usable"""
+        """Check that a model supports chat and QwenPaw tool requests."""
         model_id = (model_id or "").strip()
         if not model_id:
             return False, "Empty model ID"
 
         try:
             client = self._client(timeout=timeout)
+            common_kwargs = {
+                "model": model_id,
+                "timeout": timeout,
+                "stream": True,
+                **_token_limit_kwargs(model_id, 20),
+            }
             res = await client.chat.completions.create(
-                model=model_id,
                 messages=[
                     {
                         "role": "user",
@@ -188,20 +193,71 @@ class OpenAIProvider(Provider):
                         ],
                     },
                 ],
-                timeout=timeout,
-                stream=True,
-                **_token_limit_kwargs(model_id, 20),
+                **common_kwargs,
             )
             # consume the stream to ensure the model is actually responsive
             async for _ in res:
                 break
-            return True, ""
-        except APIError:
-            return False, f"API error when connecting to model '{model_id}'"
-        except Exception:
+        except APIError as exc:
+            detail = str(exc) or getattr(exc, "message", "")
+            status = getattr(exc, "status_code", "unknown")
+            return False, (
+                f"API error when connecting to model '{model_id}' "
+                f"(status={status}): {detail}"
+            )
+        except Exception as exc:
             return (
                 False,
-                f"Unknown exception when connecting to model '{model_id}'",
+                f"Unknown exception when connecting to model '{model_id}': "
+                f"{exc}",
+            )
+
+        probe_tool = {
+            "type": "function",
+            "function": {
+                "name": "qwenpaw_connection_probe",
+                "description": "A no-op tool used to verify tool support.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                            "description": "Optional no-op probe value.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        }
+        try:
+            res = await client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Reply with pong. Do not call tools.",
+                            },
+                        ],
+                    },
+                ],
+                tools=[probe_tool],
+                **common_kwargs,
+            )
+            async for _ in res:
+                break
+            return True, ""
+        except APIError as exc:
+            detail = str(exc) or getattr(exc, "message", "")
+            status = getattr(exc, "status_code", "unknown")
+            return False, (
+                f"Tool calling check failed for model '{model_id}' "
+                f"(status={status}): {detail}"
+            )
+        except Exception as exc:
+            return False, (
+                f"Tool calling check failed for model '{model_id}': {exc}"
             )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:

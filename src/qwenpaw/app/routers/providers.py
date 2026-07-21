@@ -47,6 +47,15 @@ ChatModelName = Literal[
 # agent: a specific agent's model only, error if not set
 ActiveModelReadScope = Literal["effective", "global", "agent"]
 ActiveModelWriteScope = Literal["global", "agent"]
+ModelAvailabilityStatus = Literal[
+    "available",
+    "permission_denied",
+    "model_not_found",
+    "incompatible_api",
+    "rate_limited",
+    "transient_error",
+    "unverified",
+]
 
 
 async def get_provider_manager(request: Request) -> ProviderManager:
@@ -208,6 +217,23 @@ def _validate_model_slot(
                 f"Model '{model_id}' not found in provider '{provider_id}'."
             ),
         )
+    model_info = provider.get_model_info(model_id)
+    if model_info and (
+        model_info.supports_tool_calling is False
+        or model_info.availability_status
+        in {
+            "permission_denied",
+            "model_not_found",
+            "incompatible_api",
+        }
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{model_id}' cannot be activated: "
+                f"{model_info.availability_message or model_info.availability_status}"
+            ),
+        )
 
 
 async def _load_agent_model(
@@ -311,6 +337,13 @@ async def create_custom_provider_endpoint(
 class TestConnectionResponse(BaseModel):
     success: bool = Field(..., description="Whether the test passed")
     message: str = Field(..., description="Human-readable result message")
+    status: Optional[ModelAvailabilityStatus] = Field(
+        default=None,
+        description="Structured model availability status",
+    )
+    http_status: Optional[int] = Field(default=None)
+    retryable: Optional[bool] = Field(default=None)
+    checked_at: Optional[str] = Field(default=None)
 
 
 class TestProviderRequest(BaseModel):
@@ -367,7 +400,7 @@ class DiscoverModelsResponse(BaseModel):
     )
     added_count: int = Field(
         default=0,
-        description="How many new models were added into provider config",
+        description="How many new models were added into the discovery catalog",
     )
     last_synced_at: Optional[str] = Field(default=None)
     used_static_fallback: bool = Field(default=False)
@@ -486,14 +519,21 @@ async def test_model(
         provider = manager.get_provider(provider_id)
         if provider is None:
             raise ValueError(f"Provider '{provider_id}' not found")
-        ok, msg = await provider.check_model_connection(model_id=body.model_id)
+        result = await manager.check_provider_model(
+            provider_id,
+            body.model_id,
+        )
         return TestConnectionResponse(
-            success=ok,
+            success=result.success,
             message=(
                 "Model connection successful"
-                if ok
-                else f"Model connection failed: {msg}"
+                if result.success
+                else f"Model connection failed: {result.message}"
             ),
+            status=result.status,
+            http_status=result.http_status,
+            retryable=result.retryable,
+            checked_at=result.checked_at,
         )
     except (ValueError, AppBaseException) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -529,17 +569,19 @@ async def add_model_endpoint(
     body: AddModelRequest = Body(...),
 ) -> ProviderInfo:
     try:
+        model_payload = {"id": body.id, "name": body.name}
+        for field in (
+            "supports_multimodal",
+            "supports_image",
+            "supports_video",
+            "probe_source",
+            "is_free",
+        ):
+            if field in body.model_fields_set:
+                model_payload[field] = getattr(body, field)
         provider = await manager.add_model_to_provider(
             provider_id=provider_id,
-            model_info=ModelInfo(
-                id=body.id,
-                name=body.name,
-                supports_multimodal=body.supports_multimodal,
-                supports_image=body.supports_image,
-                supports_video=body.supports_video,
-                probe_source=body.probe_source,
-                is_free=body.is_free,
-            ),
+            model_info=ModelInfo(**model_payload),
         )  # Validate provider exists and add model
     except (ValueError, AppBaseException) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -10,6 +10,7 @@ from qwenpaw.app.routers.providers import (
     ProviderConfigRequest,
     configure_provider,
     discover_models,
+    test_model as model_test_endpoint,
 )
 from qwenpaw.providers.provider import ModelInfo, ProviderInfo
 
@@ -104,4 +105,34 @@ async def test_discover_preview_does_not_persist_credentials() -> None:
         "openai",
         save=False,
         provider_override=provider,
+    )
+
+
+async def test_model_route_returns_structured_availability() -> None:
+    manager = MagicMock()
+    manager.get_provider.return_value = SimpleNamespace()
+    manager.check_provider_model = AsyncMock(
+        return_value=SimpleNamespace(
+            success=False,
+            status="permission_denied",
+            message="status=401: unauthorized",
+            http_status=401,
+            retryable=False,
+            checked_at="2026-07-21T00:00:00+00:00",
+        ),
+    )
+
+    result = await model_test_endpoint(
+        manager=manager,
+        provider_id="modelscope",
+        body=SimpleNamespace(model_id="org/model"),
+    )
+
+    assert result.success is False
+    assert result.status == "permission_denied"
+    assert result.http_status == 401
+    assert result.retryable is False
+    manager.check_provider_model.assert_awaited_once_with(
+        "modelscope",
+        "org/model",
     )

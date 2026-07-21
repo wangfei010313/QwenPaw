@@ -54,6 +54,27 @@ class ModelInfo(BaseModel):
         default=None,
         description="UTC timestamp of the latest successful discovery.",
     )
+    discovery_origin: Literal["api", "catalog", "both"] | None = Field(
+        default=None,
+        description="Candidate source: provider API, catalog, or both.",
+    )
+    availability_status: Literal[
+        "available",
+        "permission_denied",
+        "model_not_found",
+        "incompatible_api",
+        "rate_limited",
+        "transient_error",
+        "unverified",
+    ] = Field(default="unverified")
+    availability_message: str | None = Field(default=None)
+    availability_http_status: int | None = Field(default=None)
+    availability_retryable: bool = Field(default=True)
+    availability_checked_at: str | None = Field(default=None)
+    supports_tool_calling: bool | None = Field(
+        default=None,
+        description="Whether the model accepts OpenAI-style tool requests.",
+    )
     config_overrides: List[str] = Field(
         default_factory=list,
         description="Model fields explicitly changed by the user.",
@@ -100,6 +121,14 @@ class ModelInfo(BaseModel):
         """Accept legacy ``preserve_thinking`` key as alias."""
         if isinstance(data, dict) and "preserve_thinking" in data:
             data.setdefault("relay_reasoning", data.pop("preserve_thinking"))
+        # Availability checks created before tool probing only proved basic
+        # chat support. Do not treat those cached successes as agent-ready.
+        if (
+            isinstance(data, dict)
+            and data.get("availability_status") == "available"
+            and "supports_tool_calling" not in data
+        ):
+            data["availability_status"] = "unverified"
         return data
 
     thinking_enabled: bool | None = Field(
@@ -347,9 +376,11 @@ class Provider(ProviderInfo, ABC):
     ) -> tuple[bool, str]:
         """Add a model to the provider's model list."""
         model_info.id = model_info.id.strip()
+        # A discovered entry is a catalog candidate, not a configured model.
+        # It may therefore be copied into extra_models when the user adds it.
         if any(
             model.id.strip() == model_info.id
-            for model in Provider.all_models(self)
+            for model in (*self.models, *self.extra_models)
         ):
             return False, f"Model '{model_info.id}' already exists"
         if target == "extra_models":
@@ -718,16 +749,6 @@ class Provider(ProviderInfo, ABC):
             api_key = prefix_for_mask + "*" * 6
         else:
             api_key = self.api_key
-        # The public ``models`` list remains the effective non-user catalog
-        # for backwards compatibility with existing API consumers. The
-        # separate discovered list preserves provenance and persistence.
-        user_model_ids = {model.id for model in self.extra_models}
-        effective_models = [
-            model
-            for model in Provider.all_models(self)
-            if model.id not in user_model_ids
-        ]
-
         # Serialize models/extra_models to plain dicts so that
         # ProviderInfo constructs fresh ModelInfo instances using
         # the class in its own module scope.  This avoids pydantic
@@ -740,7 +761,9 @@ class Provider(ProviderInfo, ABC):
             base_url=self.base_url,
             api_key=api_key,
             chat_model=self.chat_model,
-            models=[m.model_dump() for m in effective_models],
+            # Discovery is a separate catalog used by the add-model form.
+            # Do not expose it as configured models to selectors or lists.
+            models=[m.model_dump() for m in self.models],
             extra_models=[m.model_dump() for m in self.extra_models],
             discovered_models=[m.model_dump() for m in self.discovered_models],
             models_last_synced_at=self.models_last_synced_at,

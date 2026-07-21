@@ -129,11 +129,17 @@ async def test_check_model_connection_success(monkeypatch) -> None:
 
     assert ok is True
     assert msg == ""
-    assert len(captured) == 1
+    assert len(captured) == 2
     assert captured[0]["model"] == "gpt-4o-mini"
     assert captured[0]["timeout"] == 4
     assert captured[0]["max_tokens"] == 20
     assert captured[0]["stream"] is True
+    assert "tools" not in captured[0]
+    assert captured[1]["tools"][0]["type"] == "function"
+    assert (
+        captured[1]["tools"][0]["function"]["name"]
+        == "qwenpaw_connection_probe"
+    )
 
 
 async def test_check_gpt5_model_uses_max_completion_tokens(
@@ -165,6 +171,45 @@ async def test_check_gpt5_model_uses_max_completion_tokens(
     assert msg == ""
     assert captured[0]["max_completion_tokens"] == 20
     assert "max_tokens" not in captured[0]
+    assert captured[1]["max_completion_tokens"] == 20
+
+
+async def test_check_model_connection_rejects_missing_tool_support(
+    monkeypatch,
+) -> None:
+    provider = _make_provider()
+    call_count = 0
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if "tools" in kwargs:
+                raise RuntimeError("The tool call is not supported")
+            return FakeStream()
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
+    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
+
+    ok, msg = await provider.check_model_connection(
+        "deepseek-r1-distill-qwen-14b",
+        timeout=4,
+    )
+
+    assert ok is False
+    assert call_count == 2
+    assert msg.startswith("Tool calling check failed for model")
+    assert msg.endswith("The tool call is not supported")
 
 
 def test_token_limit_kwargs_handles_reasoning_model_ids() -> None:
@@ -244,7 +289,10 @@ async def test_check_model_connection_api_error_returns_false(
     ok, msg = await provider.check_model_connection("gpt-4o-mini", timeout=4)
 
     assert ok is False
-    assert msg == "API error when connecting to model 'gpt-4o-mini'"
+    assert msg.startswith(
+        "API error when connecting to model 'gpt-4o-mini' (status=unknown): "
+    )
+    assert msg.endswith("failed")
 
 
 async def test_update_config_updates_non_none_values_and_get_info() -> None:

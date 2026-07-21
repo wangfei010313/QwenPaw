@@ -7,8 +7,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Literal
 
 from agentscope.model import ChatModelBase
 from pydantic import BaseModel, Field
@@ -29,6 +30,7 @@ from .context_windows import DEFAULT_CONTEXT_WINDOW
 from .dashscope_provider import DashScopeProvider
 from .gemini_provider import GeminiProvider
 from .lmstudio_provider import LMStudioProvider
+from .modelscope_provider import ModelScopeProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import (
     GitHubModelsProvider,
@@ -53,6 +55,23 @@ class ProviderModelDiscoveryResult(BaseModel):
     used_static_fallback: bool = False
     error: str | None = None
 
+class ProviderModelCheckResult(BaseModel):
+    """Structured result of checking whether a model is usable."""
+
+    success: bool
+    status: Literal[
+        "available",
+        "permission_denied",
+        "model_not_found",
+        "incompatible_api",
+        "rate_limited",
+        "transient_error",
+        "unverified",
+    ]
+    message: str = ""
+    http_status: int | None = None
+    retryable: bool = True
+    checked_at: str
 
 # -------------------------------------------------------
 # Built-in provider definitions and their default models.
@@ -897,7 +916,7 @@ GEMINI_MODELS: List[ModelInfo] = [
     ),
 ]
 
-PROVIDER_MODELSCOPE = OpenAIProvider(
+PROVIDER_MODELSCOPE = ModelScopeProvider(
     id="modelscope",
     name="ModelScope",
     base_url="https://api-inference.modelscope.cn/v1",
@@ -1629,7 +1648,11 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 error=f"Provider '{provider_id}' not found",
             )
 
-        previous_ids = {model.id for model in provider.all_models()}
+        previous_api_ids = {
+            model.id
+            for model in provider.discovered_models
+            if model.discovery_origin in {None, "api", "both"}
+        }
         try:
             fetched = await provider.fetch_models(timeout=timeout)
             fetched = [model for model in fetched if model.id.strip()]
@@ -1638,13 +1661,36 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
             synced_at = datetime.now(timezone.utc).isoformat()
             by_id: dict[str, ModelInfo] = {}
+            api_ids: set[str] = set()
             for model in fetched:
                 normalized = self._merge_discovered_model(
                     provider,
                     model,
                     synced_at,
                 )
+                normalized.discovery_origin = "api"
                 by_id.setdefault(normalized.id, normalized)
+                api_ids.add(normalized.id)
+
+            # Keep the maintained built-in catalog visible when a provider's
+            # /models endpoint exposes only a subset of its public models.
+            if provider_id in {"kimi-cn", "kimi-intl", "deepseek"}:
+                for catalog_model in provider.models:
+                    existing = by_id.get(catalog_model.id)
+                    if existing is not None:
+                        existing.discovery_origin = "both"
+                        continue
+                    catalog_payload = catalog_model.model_dump()
+                    catalog_payload.update(
+                        {
+                            "source": "discovered",
+                            "discovery_origin": "catalog",
+                            "discovered_at": synced_at,
+                        },
+                    )
+                    by_id[catalog_model.id] = ModelInfo.model_validate(
+                        catalog_payload,
+                    )
             models = list(by_id.values())
 
             if save:
@@ -1657,7 +1703,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 success=True,
                 models=models,
                 added_count=sum(
-                    model.id not in previous_ids for model in models
+                    model_id not in previous_api_ids for model_id in api_ids
                 ),
                 last_synced_at=synced_at,
             )
@@ -1678,6 +1724,158 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 used_static_fallback=True,
                 error=error,
             )
+
+    @staticmethod
+    def _extract_http_status(message: str) -> int | None:
+        """Extract an HTTP status code from provider error text."""
+        patterns = (
+            r"\bstatus\s*[=:]\s*(\d{3})\b",
+            r"\bstatus[_ ]code\s*[=:]\s*(\d{3})\b",
+            r"\berror\s+code\s*:\s*(\d{3})\b",
+            r"\bhttp\s+(\d{3})\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, message, flags=re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
+
+    @classmethod
+    def _classify_model_check(
+        cls,
+        success: bool,
+        message: str,
+    ) -> ProviderModelCheckResult:
+        """Convert provider errors into stable availability states."""
+        checked_at = datetime.now(timezone.utc).isoformat()
+        message = (message or "").strip()
+        http_status = cls._extract_http_status(message)
+        normalized = message.lower()
+
+        if success:
+            return ProviderModelCheckResult(
+                success=True,
+                status="available",
+                message=message,
+                http_status=http_status,
+                retryable=False,
+                checked_at=checked_at,
+            )
+
+        permission_markers = (
+            "unauthorized",
+            "forbidden",
+            "permission denied",
+            "permission_denied",
+            "access denied",
+            "invalid api key",
+            "incorrect api key",
+            "authentication",
+            "not activated",
+            "not enabled",
+            "无权限",
+            "未开通",
+        )
+        not_found_markers = (
+            "model not found",
+            "model_not_found",
+            "unknown model",
+            "does not exist",
+            "no such model",
+            "模型不存在",
+            "模型已下线",
+        )
+        incompatible_markers = (
+            "unsupported model",
+            "tool call is not supported",
+            "tool calling is not supported",
+            "function calling is not supported",
+            "does not support chat",
+            "not support chat",
+            "chat completions is not supported",
+            "chat completion is not supported",
+            "incompatible api",
+            "incompatible endpoint",
+            "unsupported endpoint",
+            "不支持对话",
+            "不支持 chat",
+        )
+
+        if http_status in (401, 403) or any(
+            marker in normalized for marker in permission_markers
+        ):
+            status = "permission_denied"
+            retryable = False
+        elif any(marker in normalized for marker in not_found_markers):
+            status = "model_not_found"
+            retryable = False
+        elif any(marker in normalized for marker in incompatible_markers):
+            status = "incompatible_api"
+            retryable = False
+        elif http_status == 404:
+            status = "model_not_found"
+            retryable = False
+        elif http_status == 429 or "rate limit" in normalized:
+            status = "rate_limited"
+            retryable = True
+        else:
+            status = "transient_error"
+            retryable = True
+
+        return ProviderModelCheckResult(
+            success=False,
+            status=status,
+            message=message,
+            http_status=http_status,
+            retryable=retryable,
+            checked_at=checked_at,
+        )
+
+    async def check_provider_model(
+        self,
+        provider_id: str,
+        model_id: str,
+        timeout: float = 5,
+    ) -> ProviderModelCheckResult:
+        """Check a model and cache its structured availability result."""
+        provider_id = self._normalize_provider_id(provider_id)
+        provider = self.get_provider(provider_id)
+        if provider is None:
+            raise ProviderError(
+                message=f"Provider '{provider_id}' not found.",
+            )
+
+        success, message = await provider.check_model_connection(
+            model_id=model_id,
+            timeout=timeout,
+        )
+        result = self._classify_model_check(success, message)
+
+        changed = False
+        normalized_id = model_id.strip()
+        for collection in (
+            provider.models,
+            provider.extra_models,
+            provider.discovered_models,
+        ):
+            for model in collection:
+                if model.id.strip() != normalized_id:
+                    continue
+                model.availability_status = result.status
+                model.availability_message = result.message or None
+                model.availability_http_status = result.http_status
+                model.availability_retryable = result.retryable
+                model.availability_checked_at = result.checked_at
+                if result.success:
+                    model.supports_tool_calling = True
+                elif result.status == "incompatible_api":
+                    model.supports_tool_calling = False
+                changed = True
+
+        if changed:
+            self.save_provider_config(provider_id, provider)
+
+        return result
 
     def _resolve_custom_provider_id(self, provider_id: str) -> str:
         """Resolve provider ID conflicts for a custom provider."""
@@ -1759,6 +1957,22 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 model_name=f"{provider_id}/{model_id}",
                 details={"provider_id": provider_id, "model_id": model_id},
             )
+        model_info = provider.get_model_info(model_id)
+        if model_info and (
+            model_info.supports_tool_calling is False
+            or model_info.availability_status
+            in {
+                "permission_denied",
+                "model_not_found",
+                "incompatible_api",
+            }
+        ):
+            raise ProviderError(
+                message=(
+                    f"Model '{model_id}' cannot be activated: "
+                    f"{model_info.availability_message or model_info.availability_status}"
+                ),
+            )
         self.active_model = ModelSlotConfig(
             provider_id=provider_id,
             model=model_id,
@@ -1821,6 +2035,40 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             raise ProviderError(
                 message=f"Provider '{provider_id}' not found.",
             )
+        discovered = next(
+            (
+                model
+                for model in provider.discovered_models
+                if model.id.strip() == model_info.id.strip()
+            ),
+            None,
+        )
+        if discovered is not None:
+            if discovered.availability_status in {
+                "permission_denied",
+                "model_not_found",
+                "incompatible_api",
+            }:
+                raise ProviderError(
+                    message=(
+                        f"Model '{model_info.id}' cannot be added: "
+                        f"{discovered.availability_message or discovered.availability_status}"
+                    ),
+                )
+            # Preserve API-reported metadata when a catalog candidate becomes
+            # an explicitly configured model.
+            payload = discovered.model_dump()
+            payload.update(
+                {
+                    "id": model_info.id,
+                    "name": model_info.name or discovered.name,
+                    "source": "user",
+                },
+            )
+            for field in model_info.model_fields_set:
+                payload[field] = getattr(model_info, field)
+            model_info = ModelInfo.model_validate(payload)
+
         added, error_message = await provider.add_model(model_info)
         if not added:
             raise ProviderError(
