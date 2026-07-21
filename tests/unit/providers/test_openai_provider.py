@@ -290,7 +290,7 @@ async def test_check_model_connection_api_error_returns_false(
 
     assert ok is False
     assert msg.startswith(
-        "API error when connecting to model 'gpt-4o-mini' (status=unknown): "
+        "API error when connecting to model 'gpt-4o-mini' (status=unknown): ",
     )
     assert msg.endswith("failed")
 

@@ -72,9 +72,7 @@ class DashScopeProvider(OpenAIProvider):
         """Fetch only catalog entries compatible with chat completions."""
         models = await super().fetch_models(timeout)
         return [
-            model
-            for model in models
-            if not self._is_non_chat_model(model.id)
+            model for model in models if not self._is_non_chat_model(model.id)
         ]
 
     def _is_builtin_model(self, model_id: str) -> bool:

@@ -177,9 +177,9 @@ class OpenRouterProvider(Provider):
                     # Keep the legacy field populated for API compatibility;
                     # provenance still marks this as discovered metadata.
                     window_kwargs["max_input_length"] = context_length
-                    window_kwargs["max_input_length_auto_detected"] = (
-                        context_length
-                    )
+                    window_kwargs[
+                        "max_input_length_auto_detected"
+                    ] = context_length
 
                 if include_extended:
                     # Get architecture and pricing from the API response

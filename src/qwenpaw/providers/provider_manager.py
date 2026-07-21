@@ -55,6 +55,7 @@ class ProviderModelDiscoveryResult(BaseModel):
     used_static_fallback: bool = False
     error: str | None = None
 
+
 class ProviderModelCheckResult(BaseModel):
     """Structured result of checking whether a model is usable."""
 
@@ -72,6 +73,7 @@ class ProviderModelCheckResult(BaseModel):
     http_status: int | None = None
     retryable: bool = True
     checked_at: str
+
 
 # -------------------------------------------------------
 # Built-in provider definitions and their default models.
@@ -1967,10 +1969,13 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 "incompatible_api",
             }
         ):
+            reason = (
+                model_info.availability_message
+                or model_info.availability_status
+            )
             raise ProviderError(
                 message=(
-                    f"Model '{model_id}' cannot be activated: "
-                    f"{model_info.availability_message or model_info.availability_status}"
+                    f"Model '{model_id}' cannot be activated: " f"{reason}"
                 ),
             )
         self.active_model = ModelSlotConfig(
@@ -2049,10 +2054,14 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 "model_not_found",
                 "incompatible_api",
             }:
+                reason = (
+                    discovered.availability_message
+                    or discovered.availability_status
+                )
                 raise ProviderError(
                     message=(
                         f"Model '{model_info.id}' cannot be added: "
-                        f"{discovered.availability_message or discovered.availability_status}"
+                        f"{reason}"
                     ),
                 )
             # Preserve API-reported metadata when a catalog candidate becomes

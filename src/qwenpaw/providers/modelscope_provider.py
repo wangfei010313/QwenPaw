@@ -38,7 +38,5 @@ class ModelScopeProvider(OpenAIProvider):
     async def fetch_models(self, timeout: float = 5) -> List[ModelInfo]:
         models = await super().fetch_models(timeout)
         return [
-            model
-            for model in models
-            if not self._is_non_chat_model(model.id)
+            model for model in models if not self._is_non_chat_model(model.id)
         ]

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """CLI commands for managing LLM providers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -531,7 +532,7 @@ def list_cmd() -> None:
             all_models = defn.all_models()
             if all_models:
                 click.echo(f"  {'models':16s}:")
-                extra_ids = {m.id for m in extra}
+                extra_ids = {m.id for m in defn.extra_models}
                 for m in all_models:
                     label = " [user-added]" if m.id in extra_ids else ""
                     click.echo(f"    - {m.name} ({m.id}){label}")

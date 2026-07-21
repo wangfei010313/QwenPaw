@@ -576,9 +576,9 @@ class _GeminiChatModelCompat:
                     formatted = await self.formatter.format(messages)
                     config: dict[str, Any] = {**merged}
                     if self.parameters.max_tokens is not None:
-                        config["max_output_tokens"] = (
-                            self.parameters.max_tokens
-                        )
+                        config[
+                            "max_output_tokens"
+                        ] = self.parameters.max_tokens
                     if self.parameters.temperature is not None:
                         config["temperature"] = self.parameters.temperature
                     if self.parameters.top_p is not None:

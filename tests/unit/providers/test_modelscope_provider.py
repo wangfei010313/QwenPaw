@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Tests for ModelScope model catalog filtering."""
 
+# pylint: disable=protected-access
+
 from qwenpaw.providers.modelscope_provider import ModelScopeProvider
 from qwenpaw.providers.provider import ModelInfo
 
@@ -9,7 +11,9 @@ def test_modelscope_filters_non_chat_catalog_entries() -> None:
     assert ModelScopeProvider._is_non_chat_model("Qwen/Qwen-Image-Edit")
     assert ModelScopeProvider._is_non_chat_model("Paddle/ERNIE-4.5-21B-PT")
     assert ModelScopeProvider._is_non_chat_model("OpenCompass/CompassJudger")
-    assert ModelScopeProvider._is_non_chat_model("XGenerationLab/XiYanSQL-Qwen")
+    assert ModelScopeProvider._is_non_chat_model(
+        "XGenerationLab/XiYanSQL-Qwen"
+    )
     assert not ModelScopeProvider._is_non_chat_model("Qwen/Qwen3-VL-235B")
     assert not ModelScopeProvider._is_non_chat_model("Shanghai/Intern-S1")
 

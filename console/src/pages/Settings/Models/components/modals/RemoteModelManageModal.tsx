@@ -605,8 +605,7 @@ export function RemoteModelManageModal({
   const [showFilters, setShowFilters] = useState(false);
   const [availableSeries, setAvailableSeries] = useState<string[]>([]);
   const [discoveredModels, setDiscoveredModels] = useState<ExtendedModelInfo[]>(
-    () =>
-      (provider.discovered_models ?? []) as unknown as ExtendedModelInfo[],
+    () => (provider.discovered_models ?? []) as unknown as ExtendedModelInfo[],
   );
   const [selectedSeries, setSelectedSeries] = useState<string[]>([]);
   const [selectedInputModalities, setSelectedInputModalities] = useState<
@@ -1260,9 +1259,7 @@ export function RemoteModelManageModal({
                       ?.toLowerCase()
                       .includes(inputValue.toLowerCase()) ?? false
                   }
-                  notFoundContent={
-                    t("models.modelDiscoveryUnavailableHint")
-                  }
+                  notFoundContent={t("models.modelDiscoveryUnavailableHint")}
                 >
                   <Input />
                 </AutoComplete>

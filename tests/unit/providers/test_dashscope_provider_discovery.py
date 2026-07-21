@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 from __future__ import annotations
 
 from qwenpaw.providers.dashscope_provider import DashScopeProvider
@@ -14,7 +15,9 @@ def test_dashscope_excludes_non_chat_catalog_entries() -> None:
     assert not DashScopeProvider._is_non_chat_model("qwen3-max")
 
 
-async def test_dashscope_fetch_models_filters_non_chat_entries(monkeypatch) -> None:
+async def test_dashscope_fetch_models_filters_non_chat_entries(
+    monkeypatch,
+) -> None:
     provider = DashScopeProvider(
         id="dashscope",
         name="DashScope",

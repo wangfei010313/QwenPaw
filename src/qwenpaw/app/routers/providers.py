@@ -227,12 +227,12 @@ def _validate_model_slot(
             "incompatible_api",
         }
     ):
+        reason = (
+            model_info.availability_message or model_info.availability_status
+        )
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Model '{model_id}' cannot be activated: "
-                f"{model_info.availability_message or model_info.availability_status}"
-            ),
+            detail=f"Model '{model_id}' cannot be activated: {reason}",
         )
 
 
@@ -400,7 +400,9 @@ class DiscoverModelsResponse(BaseModel):
     )
     added_count: int = Field(
         default=0,
-        description="How many new models were added into the discovery catalog",
+        description=(
+            "How many new models were added into the discovery catalog"
+        ),
     )
     last_synced_at: Optional[str] = Field(default=None)
     used_static_fallback: bool = Field(default=False)
