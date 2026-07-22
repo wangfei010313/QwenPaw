@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from typing import Dict, List, Literal
 
@@ -40,7 +41,7 @@ from .openai_provider import (
 )
 from .openai_response_provider import OpenAIResponseProvider
 from .openrouter_provider import OpenRouterProvider
-from .provider import ModelInfo, Provider, ProviderInfo
+from .provider import ModelConnectionResult, ModelInfo, Provider, ProviderInfo
 
 logger = logging.getLogger(__name__)
 
@@ -1391,6 +1392,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self.custom_providers: Dict[str, Provider] = {}
         self.plugin_providers: Dict[str, Dict] = {}  # Plugin providers
         self.active_model: ModelSlotConfig | None = None
+        self._provider_save_locks: dict[str, asyncio.Lock] = {}
+        self._discovery_generations: dict[str, int] = {}
         self.root_path = SECRET_DIR / "providers"
         self.builtin_path = self.root_path / "builtin"
         self.custom_path = self.root_path / "custom"
@@ -1650,6 +1653,11 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 error=f"Provider '{provider_id}' not found",
             )
 
+        self._discovery_generations[provider_id] = (
+            self._discovery_generations.get(provider_id, 0) + 1
+        )
+        generation = self._discovery_generations[provider_id]
+
         previous_api_ids = {
             model.id
             for model in provider.discovered_models
@@ -1695,11 +1703,13 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                     )
             models = list(by_id.values())
 
-            if save:
+            if save and generation == self._discovery_generations.get(
+                provider_id
+            ):
                 provider.discovered_models = models
                 provider.models_last_synced_at = synced_at
                 provider.models_last_sync_error = None
-                self.save_provider_config(provider_id, provider)
+                await self.save_provider_config_async(provider_id, provider)
 
             return ProviderModelDiscoveryResult(
                 success=True,
@@ -1716,12 +1726,14 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 provider_id,
                 error,
             )
-            if save:
+            if save and generation == self._discovery_generations.get(
+                provider_id
+            ):
                 provider.models_last_sync_error = error
-                self.save_provider_config(provider_id, provider)
+                await self.save_provider_config_async(provider_id, provider)
             return ProviderModelDiscoveryResult(
                 success=False,
-                models=provider.all_models(),
+                models=provider.discovery_candidates(),
                 last_synced_at=provider.models_last_synced_at,
                 used_static_fallback=True,
                 error=error,
@@ -1847,11 +1859,30 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 message=f"Provider '{provider_id}' not found.",
             )
 
-        success, message = await provider.check_model_connection(
+        raw_result = await provider.check_model_compatibility(
             model_id=model_id,
             timeout=timeout,
         )
-        result = self._classify_model_check(success, message)
+        supports_tool_calling = None
+        if isinstance(raw_result, ModelConnectionResult):
+            supports_tool_calling = raw_result.supports_tool_calling
+            result = self._classify_model_check(
+                raw_result.success,
+                raw_result.message,
+            )
+            result.http_status = raw_result.http_status or result.http_status
+            if raw_result.error_kind == "permission_denied":
+                result.status = "permission_denied"
+                result.retryable = False
+            elif raw_result.error_kind == "model_not_found":
+                result.status = "model_not_found"
+                result.retryable = False
+            elif raw_result.error_kind == "incompatible_api":
+                result.status = "incompatible_api"
+                result.retryable = False
+        else:
+            success, message = raw_result
+            result = self._classify_model_check(success, message)
 
         changed = False
         normalized_id = model_id.strip()
@@ -1868,14 +1899,14 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 model.availability_http_status = result.http_status
                 model.availability_retryable = result.retryable
                 model.availability_checked_at = result.checked_at
-                if result.success:
+                if supports_tool_calling is True:
                     model.supports_tool_calling = True
-                elif result.status == "incompatible_api":
+                elif supports_tool_calling is False:
                     model.supports_tool_calling = False
                 changed = True
 
         if changed:
-            self.save_provider_config(provider_id, provider)
+            await self.save_provider_config_async(provider_id, provider)
 
         return result
 
@@ -2315,6 +2346,71 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 provider,
                 is_builtin=provider_id in self.builtin_providers,
             )
+
+    async def save_provider_config_async(
+        self,
+        provider_id: str,
+        provider: Provider | None = None,
+    ) -> None:
+        """Persist provider state without blocking the event loop."""
+        provider_id = self._normalize_provider_id(provider_id)
+        if provider is None:
+            provider = self.get_provider(provider_id)
+        if provider is None:
+            return
+        lock = self._provider_save_locks.setdefault(
+            provider_id,
+            asyncio.Lock(),
+        )
+        async with lock:
+            snapshot = provider.model_copy(deep=True)
+            await asyncio.to_thread(
+                self._save_provider_snapshot,
+                provider_id,
+                snapshot,
+            )
+
+    def _save_provider_snapshot(
+        self, provider_id: str, provider: Provider
+    ) -> None:
+        """Serialize and atomically write a provider snapshot."""
+        is_plugin = provider_id in self.plugin_providers
+        provider_dir = (
+            self.plugin_path
+            if is_plugin
+            else (
+                self.builtin_path
+                if provider_id in self.builtin_providers
+                else self.custom_path
+            )
+        )
+        provider_path = provider_dir / f"{provider.id}.json"
+        data = encrypt_dict_fields(
+            provider.model_dump(),
+            PROVIDER_SECRET_FIELDS,
+        )
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{provider.id}.",
+            suffix=".tmp",
+            dir=provider_dir,
+            text=True,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, provider_path)
+            try:
+                os.chmod(provider_path, 0o600)
+            except OSError:
+                pass
+        finally:
+            if os.path.exists(temp_name):
+                try:
+                    os.remove(temp_name)
+                except OSError:
+                    pass
 
     def load_provider(
         self,

@@ -21,7 +21,11 @@ from qwenpaw.providers.multimodal_prober import (
     _is_media_keyword_error,
     evaluate_image_probe_answer,
 )
-from qwenpaw.providers.provider import ModelInfo, Provider
+from qwenpaw.providers.provider import (
+    ModelConnectionResult,
+    ModelInfo,
+    Provider,
+)
 
 from .capping_formatter import _CappingAnthropicFormatter
 from .capping_formatter import MAX_INLINE_MEDIA_BYTES
@@ -185,7 +189,7 @@ class AnthropicProvider(Provider):
     async def _check_connection_via_messages(
         self,
         client: anthropic.AsyncAnthropic,
-    ) -> tuple[bool, str]:
+    ) -> ModelConnectionResult:
         """Fallback: check reachability via messages.create."""
         model = self.models[0].id if self.models else "claude-opus-4-5"
         try:
@@ -222,7 +226,9 @@ class AnthropicProvider(Provider):
         """Check if a specific model is reachable/usable."""
         target = (model_id or "").strip()
         if not target:
-            return False, "Empty model ID"
+            return ModelConnectionResult(
+                success=False, message="Empty model ID"
+            )
 
         body = {
             "model": target,
@@ -246,13 +252,107 @@ class AnthropicProvider(Provider):
             # consume the stream to ensure the model is actually responsive
             async for _ in resp:
                 break
-            return True, ""
-        except anthropic.APIError:
-            return False, f"Model '{model_id}' is not reachable or usable"
-        except Exception:
-            return (
-                False,
-                f"Unknown exception when connecting to model '{model_id}'",
+            return ModelConnectionResult(success=True)
+        except anthropic.APIError as exc:
+            status = getattr(exc, "status_code", None)
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Model '{model_id}' is not reachable or usable: "
+                    f"{self.connection_error_message(exc)}"
+                ),
+                http_status=status if isinstance(status, int) else None,
+                error_kind=(
+                    "permission_denied"
+                    if status in (401, 403)
+                    else "model_not_found" if status == 404 else None
+                ),
+            )
+        except Exception as exc:
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Unknown exception when connecting to model '{model_id}': "
+                    f"{self.connection_error_message(exc)}"
+                ),
+            )
+
+    async def check_model_compatibility(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> ModelConnectionResult:
+        """Verify Anthropic native tool_use support."""
+        target = (model_id or "").strip()
+        if not target:
+            return ModelConnectionResult(
+                success=False, message="Empty model ID"
+            )
+        try:
+            client = self._client(timeout=timeout)
+            response = await client.messages.create(
+                model=target,
+                max_tokens=32,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Call qwenpaw_connection_probe with value pong.",
+                    },
+                ],
+                tools=[
+                    {
+                        "name": "qwenpaw_connection_probe",
+                        "description": "A no-op compatibility probe.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                            "required": ["value"],
+                        },
+                    },
+                ],
+                tool_choice={
+                    "type": "tool",
+                    "name": "qwenpaw_connection_probe",
+                },
+            )
+            for block in getattr(response, "content", None) or []:
+                if (
+                    getattr(block, "type", None) == "tool_use"
+                    and getattr(block, "name", None)
+                    == "qwenpaw_connection_probe"
+                    and getattr(block, "input", {}).get("value") == "pong"
+                ):
+                    return ModelConnectionResult(
+                        success=True,
+                        supports_tool_calling=True,
+                    )
+            return ModelConnectionResult(
+                success=False,
+                message="Tool probe returned no valid tool call",
+                error_kind="incompatible_api",
+                supports_tool_calling=False,
+            )
+        except anthropic.APIError as exc:
+            status = getattr(exc, "status_code", None)
+            return ModelConnectionResult(
+                success=False,
+                message=self.connection_error_message(exc),
+                http_status=status if isinstance(status, int) else None,
+                error_kind=(
+                    "permission_denied"
+                    if status in (401, 403)
+                    else (
+                        "model_not_found"
+                        if status == 404
+                        else "incompatible_api" if status == 400 else None
+                    )
+                ),
+                supports_tool_calling=False if status == 400 else None,
+            )
+        except Exception as exc:
+            return ModelConnectionResult(
+                success=False,
+                message=self.connection_error_message(exc),
             )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:
@@ -457,17 +557,17 @@ class _AnthropicChatModelCompat:
                 if self._qp_default_headers:
                     client_kwargs["default_headers"] = self._qp_default_headers
                 if self._qp_auth_mode == "auth_token":
-                    client_kwargs[
-                        "auth_token"
-                    ] = self.credential.api_key.get_secret_value()
+                    client_kwargs["auth_token"] = (
+                        self.credential.api_key.get_secret_value()
+                    )
                     if self._qp_strip_http_client is not None:
-                        client_kwargs[
-                            "http_client"
-                        ] = self._qp_strip_http_client
+                        client_kwargs["http_client"] = (
+                            self._qp_strip_http_client
+                        )
                 else:
-                    client_kwargs[
-                        "api_key"
-                    ] = self.credential.api_key.get_secret_value()
+                    client_kwargs["api_key"] = (
+                        self.credential.api_key.get_secret_value()
+                    )
 
                 self._qp_cached_client = anthropic.AsyncAnthropic(
                     **client_kwargs,

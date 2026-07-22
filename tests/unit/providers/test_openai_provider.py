@@ -109,16 +109,32 @@ async def test_check_model_connection_success(monkeypatch) -> None:
     captured: list[dict] = []
 
     class FakeStream:
+        def __init__(self, chunks=None):
+            self._chunks = iter(chunks or [])
+
         def __aiter__(self):
             return self
 
         async def __anext__(self):
-            raise StopAsyncIteration
+            try:
+                return next(self._chunks)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
 
     class FakeCompletions:
         async def create(self, **kwargs):
             captured.append(kwargs)
-            return FakeStream()
+            if "tools" not in kwargs:
+                return FakeStream()
+            function = SimpleNamespace(
+                name="qwenpaw_connection_probe",
+                arguments='{"value":"pong"}',
+            )
+            call = SimpleNamespace(function=function)
+            delta = SimpleNamespace(tool_calls=[call])
+            return FakeStream(
+                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])]
+            )
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions()),
@@ -149,16 +165,32 @@ async def test_check_gpt5_model_uses_max_completion_tokens(
     captured: list[dict] = []
 
     class FakeStream:
+        def __init__(self, chunks=None):
+            self._chunks = iter(chunks or [])
+
         def __aiter__(self):
             return self
 
         async def __anext__(self):
-            raise StopAsyncIteration
+            try:
+                return next(self._chunks)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
 
     class FakeCompletions:
         async def create(self, **kwargs):
             captured.append(kwargs)
-            return FakeStream()
+            if "tools" not in kwargs:
+                return FakeStream()
+            function = SimpleNamespace(
+                name="qwenpaw_connection_probe",
+                arguments='{"value":"pong"}',
+            )
+            call = SimpleNamespace(function=function)
+            delta = SimpleNamespace(tool_calls=[call])
+            return FakeStream(
+                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])]
+            )
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions()),

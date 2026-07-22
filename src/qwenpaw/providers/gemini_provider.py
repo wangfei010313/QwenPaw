@@ -23,7 +23,11 @@ from qwenpaw.providers.multimodal_prober import (
     _is_media_keyword_error,
     evaluate_image_probe_answer,
 )
-from qwenpaw.providers.provider import ModelInfo, Provider
+from qwenpaw.providers.provider import (
+    ModelConnectionResult,
+    ModelInfo,
+    Provider,
+)
 from .capping_formatter import _CappingGeminiFormatter
 from .capping_formatter import MAX_INLINE_MEDIA_BYTES
 
@@ -265,11 +269,13 @@ class GeminiProvider(Provider):
         self,
         model_id: str,
         timeout: float = 10,
-    ) -> tuple[bool, str]:
+    ) -> ModelConnectionResult:
         """Check if a specific Gemini model is reachable/usable."""
         target = (model_id or "").strip()
         if not target:
-            return False, "Empty model ID"
+            return ModelConnectionResult(
+                success=False, message="Empty model ID"
+            )
 
         try:
             client = self._client(timeout=timeout)
@@ -279,16 +285,112 @@ class GeminiProvider(Provider):
             )
             async for _ in response:
                 break
-            return True, ""
-        except genai_errors.APIError:
-            return (
-                False,
-                f"Model '{model_id}' is not reachable or usable",
+            return ModelConnectionResult(success=True)
+        except genai_errors.APIError as exc:
+            status = getattr(exc, "code", None) or getattr(
+                exc, "status_code", None
             )
-        except Exception:
-            return (
-                False,
-                f"Unknown exception when connecting to model '{model_id}'",
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Model '{model_id}' is not reachable or usable: "
+                    f"{self.connection_error_message(exc)}"
+                ),
+                http_status=status if isinstance(status, int) else None,
+                error_kind=(
+                    "permission_denied"
+                    if status in (401, 403)
+                    else "model_not_found" if status == 404 else None
+                ),
+            )
+        except Exception as exc:
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Unknown exception when connecting to model '{model_id}': "
+                    f"{self.connection_error_message(exc)}"
+                ),
+            )
+
+    async def check_model_compatibility(
+        self,
+        model_id: str,
+        timeout: float = 10,
+    ) -> ModelConnectionResult:
+        """Verify Gemini native forced function calling."""
+        target = (model_id or "").strip()
+        if not target:
+            return ModelConnectionResult(
+                success=False, message="Empty model ID"
+            )
+        declaration = genai_types.FunctionDeclaration(
+            name="qwenpaw_connection_probe",
+            description="A no-op compatibility probe.",
+            parameters={
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            },
+        )
+        try:
+            client = self._client(timeout=timeout)
+            response = await client.aio.models.generate_content(
+                model=target,
+                contents="Call qwenpaw_connection_probe with value pong.",
+                config=genai_types.GenerateContentConfig(
+                    tools=[
+                        genai_types.Tool(function_declarations=[declaration])
+                    ],
+                    tool_config=genai_types.ToolConfig(
+                        function_calling_config=genai_types.FunctionCallingConfig(
+                            mode="ANY",
+                            allowed_function_names=[
+                                "qwenpaw_connection_probe"
+                            ],
+                        ),
+                    ),
+                ),
+            )
+            calls = getattr(response, "function_calls", None) or []
+            for call in calls:
+                if (
+                    getattr(call, "name", None) == "qwenpaw_connection_probe"
+                    and dict(getattr(call, "args", {}) or {}).get("value")
+                    == "pong"
+                ):
+                    return ModelConnectionResult(
+                        success=True,
+                        supports_tool_calling=True,
+                    )
+            return ModelConnectionResult(
+                success=False,
+                message="Tool probe returned no valid tool call",
+                error_kind="incompatible_api",
+                supports_tool_calling=False,
+            )
+        except genai_errors.APIError as exc:
+            status = getattr(exc, "code", None) or getattr(
+                exc, "status_code", None
+            )
+            return ModelConnectionResult(
+                success=False,
+                message=self.connection_error_message(exc),
+                http_status=status if isinstance(status, int) else None,
+                error_kind=(
+                    "permission_denied"
+                    if status in (401, 403)
+                    else (
+                        "model_not_found"
+                        if status == 404
+                        else "incompatible_api" if status == 400 else None
+                    )
+                ),
+                supports_tool_calling=False if status == 400 else None,
+            )
+        except Exception as exc:
+            return ModelConnectionResult(
+                success=False,
+                message=self.connection_error_message(exc),
             )
 
     @staticmethod
@@ -576,9 +678,9 @@ class _GeminiChatModelCompat:
                     formatted = await self.formatter.format(messages)
                     config: dict[str, Any] = {**merged}
                     if self.parameters.max_tokens is not None:
-                        config[
-                            "max_output_tokens"
-                        ] = self.parameters.max_tokens
+                        config["max_output_tokens"] = (
+                            self.parameters.max_tokens
+                        )
                     if self.parameters.temperature is not None:
                         config["temperature"] = self.parameters.temperature
                     if self.parameters.top_p is not None:

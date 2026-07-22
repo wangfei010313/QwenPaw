@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Type
 
 from agentscope.model import ChatModelBase
@@ -137,6 +138,7 @@ class ModelInfo(BaseModel):
         "use model default), True=enable, False=disable. "
         "Provider-specific mapping applies.",
     )
+
     thinking_budget: int | None = Field(
         default=None,
         ge=1,
@@ -185,6 +187,21 @@ class ExtendedModelInfo(ModelInfo):
         default_factory=dict,
         description="Pricing info (prompt/completion)",
     )
+
+
+class ModelConnectionResult(BaseModel):
+    """Connection evidence returned by provider compatibility checks."""
+
+    success: bool
+    message: str = ""
+    http_status: int | None = None
+    error_kind: str | None = None
+    supports_tool_calling: bool | None = None
+
+    def __iter__(self):
+        """Keep compatibility with providers/tests that unpack two values."""
+        yield self.success
+        yield self.message
 
 
 class ProviderInfo(BaseModel):
@@ -368,6 +385,39 @@ class Provider(ProviderInfo, ABC):
     ) -> tuple[bool, str]:
         """Check if a specific model is reachable/usable."""
 
+    async def check_model_compatibility(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> ModelConnectionResult:
+        """Return structured evidence without assuming tool support."""
+        result = await self.check_model_connection(model_id, timeout)
+        if isinstance(result, ModelConnectionResult):
+            return result
+        success, message = result
+        return ModelConnectionResult(success=success, message=message)
+
+    @staticmethod
+    def _sanitize_connection_message(message: str) -> str:
+        """Remove likely credential values from provider error text."""
+        return re.sub(
+            r"(?i)(api[_ -]?key|authorization|token)[=: ]+[^,; ]+",
+            r"\1=[redacted]",
+            message,
+        )
+
+    @classmethod
+    def connection_error_message(cls, exc: Exception) -> str:
+        """Format an SDK exception while preserving its HTTP status."""
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+        detail = cls._sanitize_connection_message(
+            str(exc) or exc.__class__.__name__,
+        )
+        return f"status={status}: {detail}" if status is not None else detail
+
     async def add_model(
         self,
         model_info: ModelInfo,
@@ -469,18 +519,30 @@ class Provider(ProviderInfo, ABC):
                 model.source = "user"
 
     def all_models(self) -> List[ModelInfo]:
-        """Return the effective, de-duplicated model list.
+        """Return configured models only."""
+        return Provider.configured_models(self)
 
-        Built-in ordering is retained while API metadata and user-added
-        entries override matching IDs. User entries have the highest
-        precedence.
-        """
+    def configured_models(self) -> List[ModelInfo]:
+        """Return the effective configured model list."""
+        ordered_ids: list[str] = []
+        by_id: dict[str, ModelInfo] = {}
+        for collection in (
+            getattr(self, "models", []),
+            getattr(self, "extra_models", []),
+        ):
+            for model in collection:
+                if model.id not in by_id:
+                    ordered_ids.append(model.id)
+                by_id[model.id] = model
+        return [by_id[model_id] for model_id in ordered_ids]
+
+    def discovery_candidates(self) -> List[ModelInfo]:
+        """Return models visible to the add-model discovery flow."""
         ordered_ids: list[str] = []
         by_id: dict[str, ModelInfo] = {}
         for collection in (
             getattr(self, "models", []),
             getattr(self, "discovered_models", []),
-            getattr(self, "extra_models", []),
         ):
             for model in collection:
                 if model.id not in by_id:
@@ -614,12 +676,18 @@ class Provider(ProviderInfo, ABC):
         """Return the ModelInfo for *model_id*, or None."""
         for collection in (
             getattr(self, "extra_models", []),
-            getattr(self, "discovered_models", []),
             getattr(self, "models", []),
         ):
             for model in collection:
                 if model.id == model_id:
                     return model
+        return None
+
+    def get_discovered_model_info(self, model_id: str) -> ModelInfo | None:
+        """Return a discovery candidate without treating it as configured."""
+        for model in getattr(self, "discovered_models", []):
+            if model.id == model_id:
+                return model
         return None
 
     def _get_relay_reasoning(self, model_id: str) -> bool:

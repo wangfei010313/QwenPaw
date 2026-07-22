@@ -239,7 +239,7 @@ async def test_check_model_connection_api_error_returns_false(
     )
 
     assert ok is False
-    assert msg == "Model 'claude-3-5-haiku' is not reachable or usable"
+    assert msg == "Model 'claude-3-5-haiku' is not reachable or usable: failed"
 
 
 async def test_update_config_updates_only_non_none_values() -> None:

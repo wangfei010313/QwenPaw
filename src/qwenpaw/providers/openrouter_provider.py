@@ -12,6 +12,7 @@ from pydantic import Field
 
 from qwenpaw.providers.provider import (
     Provider,
+    ModelConnectionResult,
     ExtendedModelInfo,
     ModelInfo,
 )
@@ -177,9 +178,9 @@ class OpenRouterProvider(Provider):
                     # Keep the legacy field populated for API compatibility;
                     # provenance still marks this as discovered metadata.
                     window_kwargs["max_input_length"] = context_length
-                    window_kwargs[
-                        "max_input_length_auto_detected"
-                    ] = context_length
+                    window_kwargs["max_input_length_auto_detected"] = (
+                        context_length
+                    )
 
                 if include_extended:
                     # Get architecture and pricing from the API response
@@ -362,23 +363,15 @@ class OpenRouterProvider(Provider):
         self,
         model_id: str,
         timeout: float = 30,
-    ) -> tuple[bool, str]:
-        """Check if a specific model is reachable/usable"""
-        try:
-            client = self._client(timeout=timeout)
-            res = await client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "user", "content": "ping"}],
-                timeout=timeout,
-                max_tokens=1,
-                stream=True,
-            )
-            # consume the stream to ensure the model is actually responsive
-            async for _ in res:
-                break
-            return True, ""
-        except APIError as e:
-            return False, str(e)
+    ) -> ModelConnectionResult:
+        """Check a model through the OpenAI-compatible tool probe."""
+        from .openai_provider import OpenAIProvider
+
+        return await OpenAIProvider.check_model_connection(
+            self,
+            model_id=model_id,
+            timeout=timeout,
+        )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:
         from agentscope.credential._openai import OpenAICredential

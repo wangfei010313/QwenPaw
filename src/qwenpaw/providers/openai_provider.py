@@ -14,7 +14,11 @@ from agentscope.model import ChatModelBase
 from openai import APIError
 from pydantic import Field
 
-from qwenpaw.providers.provider import ModelInfo, Provider
+from qwenpaw.providers.provider import (
+    ModelConnectionResult,
+    ModelInfo,
+    Provider,
+)
 
 from .capping_formatter import MAX_INLINE_MEDIA_BYTES, _CappingOpenAIFormatter
 
@@ -167,11 +171,13 @@ class OpenAIProvider(Provider):
         self,
         model_id: str,
         timeout: float = 5,
-    ) -> tuple[bool, str]:
+    ) -> ModelConnectionResult:
         """Check that a model supports chat and QwenPaw tool requests."""
         model_id = (model_id or "").strip()
         if not model_id:
-            return False, "Empty model ID"
+            return ModelConnectionResult(
+                success=False, message="Empty model ID"
+            )
 
         try:
             client = self._client(timeout=timeout)
@@ -201,15 +207,21 @@ class OpenAIProvider(Provider):
         except APIError as exc:
             detail = str(exc) or getattr(exc, "message", "")
             status = getattr(exc, "status_code", "unknown")
-            return False, (
-                f"API error when connecting to model '{model_id}' "
-                f"(status={status}): {detail}"
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"API error when connecting to model '{model_id}' "
+                    f"(status={status}): {detail}"
+                ),
+                http_status=status if isinstance(status, int) else None,
             )
         except Exception as exc:
-            return (
-                False,
-                f"Unknown exception when connecting to model '{model_id}': "
-                f"{exc}",
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Unknown exception when connecting to model '{model_id}': "
+                    f"{self.connection_error_message(exc)}"
+                ),
             )
 
         probe_tool = {
@@ -237,27 +249,76 @@ class OpenAIProvider(Provider):
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Reply with pong. Do not call tools.",
+                                "text": "Call qwenpaw_connection_probe with value pong.",
                             },
                         ],
                     },
                 ],
                 tools=[probe_tool],
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "qwenpaw_connection_probe"},
+                },
                 **common_kwargs,
             )
-            async for _ in res:
-                break
-            return True, ""
+            tool_name = None
+            arguments = ""
+            async for chunk in res:
+                for choice in getattr(chunk, "choices", None) or []:
+                    for call in (
+                        getattr(
+                            getattr(choice, "delta", None), "tool_calls", None
+                        )
+                        or []
+                    ):
+                        function = getattr(call, "function", None)
+                        if function is not None:
+                            tool_name = (
+                                getattr(function, "name", None) or tool_name
+                            )
+                            arguments += (
+                                getattr(function, "arguments", "") or ""
+                            )
+            if tool_name != "qwenpaw_connection_probe":
+                return ModelConnectionResult(
+                    success=False,
+                    message="Tool probe returned no valid tool call",
+                    error_kind="incompatible_api",
+                    supports_tool_calling=False,
+                )
+            try:
+                valid_arguments = json.loads(arguments).get("value") == "pong"
+            except (TypeError, ValueError):
+                valid_arguments = False
+            if not valid_arguments:
+                return ModelConnectionResult(
+                    success=False,
+                    message="Tool probe returned invalid arguments",
+                    error_kind="incompatible_api",
+                    supports_tool_calling=False,
+                )
+            return ModelConnectionResult(
+                success=True, supports_tool_calling=True
+            )
         except APIError as exc:
             detail = str(exc) or getattr(exc, "message", "")
             status = getattr(exc, "status_code", "unknown")
-            return False, (
-                f"Tool calling check failed for model '{model_id}' "
-                f"(status={status}): {detail}"
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Tool calling check failed for model '{model_id}' "
+                    f"(status={status}): {detail}"
+                ),
+                http_status=status if isinstance(status, int) else None,
+                error_kind="incompatible_api" if status == 400 else None,
             )
         except Exception as exc:
-            return False, (
-                f"Tool calling check failed for model '{model_id}': {exc}"
+            return ModelConnectionResult(
+                success=False,
+                message=(
+                    f"Tool calling check failed for model '{model_id}': "
+                    f"{self.connection_error_message(exc)}"
+                ),
             )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:

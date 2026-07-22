@@ -537,12 +537,15 @@ async def test_discovery_keeps_user_models_and_persists_cache(
         "remote-new",
     ]
     assert provider.discovered_models[0].source == "discovered"
-    assert provider.get_context_size("remote-new") == 256_000
+    candidate = provider.get_discovered_model_info("remote-new")
+    assert candidate is not None
+    assert candidate.max_input_length_auto_detected == 256_000
 
     reloaded = ProviderManager().get_provider("openai")
     assert reloaded is not None
     assert reloaded.has_model("user-only")
-    assert reloaded.has_model("remote-new")
+    assert not reloaded.has_model("remote-new")
+    assert reloaded.get_discovered_model_info("remote-new") is not None
     assert reloaded.models_last_synced_at == result.last_synced_at
 
 
@@ -580,10 +583,8 @@ async def test_failed_discovery_preserves_last_cache_and_user_models(
         "cached-remote",
     ]
     assert [model.id for model in provider.extra_models] == ["user-only"]
-    assert {model.id for model in result.models} >= {
-        "cached-remote",
-        "user-only",
-    }
+    assert {model.id for model in result.models} >= {"cached-remote"}
+    assert "user-only" not in {model.id for model in result.models}
 
 
 async def test_discovery_deduplicates_and_preserves_builtin_metadata(
@@ -646,12 +647,12 @@ async def test_discovery_preserves_explicit_context_override(
     result = await manager.discover_provider_models("openrouter")
 
     assert result.success is True
-    model = provider.get_model_info("vendor/model")
+    model = provider.get_discovered_model_info("vendor/model")
     assert model is not None
     assert model.max_input_length == 64_000
     assert model.max_input_length_configured is True
     assert model.max_input_length_auto_detected == 1_000_000
-    assert provider.get_context_size("vendor/model") == 64_000
+    assert provider.get_context_size("vendor/model") == DEFAULT_CONTEXT_WINDOW
 
 
 async def test_discovery_preserves_model_config_overrides(
@@ -668,13 +669,12 @@ async def test_discovery_preserves_model_config_overrides(
             source="discovered",
         ),
     ]
-    assert provider.update_model_config(
-        "remote-model",
-        {
-            "max_tokens": 1234,
-            "generate_kwargs": {"temperature": 0.2},
-        },
-    )
+    provider.discovered_models[0].max_tokens = 1234
+    provider.discovered_models[0].generate_kwargs = {"temperature": 0.2}
+    provider.discovered_models[0].config_overrides = [
+        "max_tokens",
+        "generate_kwargs",
+    ]
 
     async def fetch_models(_self, timeout=5):
         return [
@@ -691,7 +691,7 @@ async def test_discovery_preserves_model_config_overrides(
     result = await manager.discover_provider_models("openai")
 
     assert result.success is True
-    model = provider.get_model_info("remote-model")
+    model = provider.get_discovered_model_info("remote-model")
     assert model is not None
     assert model.name == "Updated Remote Model"
     assert model.max_tokens == 1234
@@ -715,6 +715,28 @@ async def test_activate_provider_invalid_model_raises(
 
     with pytest.raises(ModelNotFoundException, match="not-exists"):
         await manager.activate_model("openai", "not-exists")
+
+
+async def test_discovery_only_model_cannot_activate_until_added(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = [
+        ModelInfo(id="candidate-only", name="Candidate", source="discovered"),
+    ]
+
+    with pytest.raises(ModelNotFoundException):
+        await manager.activate_model("openai", "candidate-only")
+
+    await manager.add_model_to_provider(
+        "openai",
+        ModelInfo(id="candidate-only", name="Candidate"),
+    )
+    await manager.activate_model("openai", "candidate-only")
+    assert manager.active_model is not None
+    assert manager.active_model.model == "candidate-only"
 
 
 async def test_add_model_to_provider_duplicate_id_raises(

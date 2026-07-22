@@ -10,6 +10,7 @@ from agentscope.model import ChatModelBase, OpenAIResponseModel
 
 from .capping_formatter import _CappingOpenAIResponseFormatter
 from .openai_provider import OpenAIProvider
+from .provider import ModelConnectionResult
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,82 @@ class OpenAIResponseProvider(OpenAIProvider):
             return (
                 False,
                 f"Unknown exception when connecting to model '{model_id}'",
+            )
+
+    async def check_model_compatibility(
+        self,
+        model_id: str,
+        timeout: float = 5,
+    ) -> ModelConnectionResult:
+        """Verify a forced no-op tool call through the Responses API."""
+        model_id = (model_id or "").strip()
+        if not model_id:
+            return ModelConnectionResult(
+                success=False, message="Empty model ID"
+            )
+        client = self._client(timeout=timeout)
+        try:
+            await client.responses.create(
+                model=model_id,
+                input="ping",
+                timeout=timeout,
+                max_output_tokens=20,
+            )
+            response = await client.responses.create(
+                model=model_id,
+                input="Call qwenpaw_connection_probe with value pong.",
+                tools=[
+                    {
+                        "type": "function",
+                        "name": "qwenpaw_connection_probe",
+                        "description": "A no-op compatibility probe.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        },
+                    },
+                ],
+                tool_choice={
+                    "type": "function",
+                    "name": "qwenpaw_connection_probe",
+                },
+                timeout=timeout,
+                max_output_tokens=20,
+            )
+            for item in getattr(response, "output", None) or []:
+                if (
+                    getattr(item, "type", None) == "function_call"
+                    and getattr(item, "name", None)
+                    == "qwenpaw_connection_probe"
+                ):
+                    try:
+                        import json
+
+                        arguments = json.loads(
+                            getattr(item, "arguments", "{}"),
+                        )
+                    except (TypeError, ValueError):
+                        arguments = {}
+                    if arguments.get("value") == "pong":
+                        return ModelConnectionResult(
+                            success=True,
+                            supports_tool_calling=True,
+                        )
+            return ModelConnectionResult(
+                success=False,
+                message="Tool probe returned no valid tool call",
+                error_kind="incompatible_api",
+                supports_tool_calling=False,
+            )
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            return ModelConnectionResult(
+                success=False,
+                message=self.connection_error_message(exc),
+                http_status=status if isinstance(status, int) else None,
+                error_kind="incompatible_api" if status == 400 else None,
             )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:
