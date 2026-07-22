@@ -366,7 +366,7 @@ class ProviderInfo(BaseModel):
         return self
 
 
-class Provider(ProviderInfo, ABC):
+class Provider(ProviderInfo, ABC):  # pylint: disable=too-many-public-methods
     """Represents a provider instance with its configuration."""
 
     @abstractmethod

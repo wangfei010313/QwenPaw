@@ -656,6 +656,58 @@ async def test_discovery_preserves_explicit_context_override(
     assert provider.get_context_size("vendor/model") == DEFAULT_CONTEXT_WINDOW
 
 
+async def test_discovery_applies_metadata_to_configured_model(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    configured = provider.models[0]
+    configured.max_tokens = 1024
+    configured.config_overrides = ["max_tokens"]
+
+    async def fetch_models(_self, timeout=5):
+        _ = timeout
+        return [
+            ModelInfo(
+                id=configured.id,
+                name="API Model Name",
+                max_input_length_auto_detected=256_000,
+                max_tokens=32_768,
+                supports_image=True,
+            ),
+        ]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is True
+    assert configured.source == "builtin"
+    assert configured.max_input_length_auto_detected == 256_000
+    assert configured.max_tokens == 1024
+    assert configured.supports_image is True
+    assert provider.get_context_size(configured.id) == 256_000
+
+
+def test_builtin_variants_do_not_share_model_instances(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    china = manager.get_provider("aliyun-tokenplan")
+    international = manager.get_provider("aliyun-tokenplan-intl")
+
+    assert china is not None
+    assert international is not None
+    assert china.models[0] is not international.models[0]
+
+    original = international.models[0].max_tokens
+    china.models[0].max_tokens = 4096
+
+    assert international.models[0].max_tokens == original
+
+
 async def test_discovery_preserves_model_config_overrides(
     isolated_secret_dir,
     monkeypatch,

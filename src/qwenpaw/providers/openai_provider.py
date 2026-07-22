@@ -167,6 +167,7 @@ class OpenAIProvider(Provider):
         except Exception:
             return []
 
+    # pylint: disable=too-many-return-statements
     async def check_model_connection(
         self,
         model_id: str,
@@ -219,8 +220,8 @@ class OpenAIProvider(Provider):
             return ModelConnectionResult(
                 success=False,
                 message=(
-                    f"Unknown exception when connecting to model '{model_id}': "
-                    f"{self.connection_error_message(exc)}"
+                    f"Unknown exception when connecting to model "
+                    f"'{model_id}': {self.connection_error_message(exc)}"
                 ),
             )
 
@@ -249,7 +250,10 @@ class OpenAIProvider(Provider):
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Call qwenpaw_connection_probe with value pong.",
+                                "text": (
+                                    "Call qwenpaw_connection_probe "
+                                    "with value pong."
+                                ),
                             },
                         ],
                     },

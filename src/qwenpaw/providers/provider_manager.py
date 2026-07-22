@@ -1457,7 +1457,10 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self._add_builtin(PROVIDER_MIMO_TOKENPLAN)
 
     def _add_builtin(self, provider: Provider):
-        self.builtin_providers[provider.id] = provider
+        # Built-in definitions may reuse model lists across regional variants.
+        # Each manager instance needs independent model objects for persisted
+        # overrides and discovery metadata.
+        self.builtin_providers[provider.id] = provider.model_copy(deep=True)
 
     async def list_provider_info(self) -> List[ProviderInfo]:
         tasks = [
@@ -1645,6 +1648,39 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         )
         return ModelInfo.model_validate(payload)
 
+    @staticmethod
+    def _apply_discovery_metadata(
+        provider: Provider,
+        fetched: List[ModelInfo],
+    ) -> None:
+        """Apply API metadata to matching configured models.
+
+        Discovery candidates remain separate from configured models. This
+        copies only metadata the API explicitly supplied, while preserving
+        user-controlled fields recorded in ``config_overrides``.
+        """
+        metadata_fields = (
+            "max_input_length_auto_detected",
+            "max_tokens",
+            "supports_multimodal",
+            "supports_image",
+            "supports_video",
+            "probe_source",
+            "is_free",
+        )
+        fetched_by_id = {model.id: model for model in fetched}
+        for configured in provider.configured_models():
+            remote = fetched_by_id.get(configured.id)
+            if remote is None:
+                continue
+            overridden = set(configured.config_overrides)
+            for field in metadata_fields:
+                if (
+                    field in remote.model_fields_set
+                    and field not in overridden
+                ):
+                    setattr(configured, field, getattr(remote, field))
+
     async def discover_provider_models(
         self,
         provider_id: str,
@@ -1722,6 +1758,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             if save and generation == self._discovery_generations.get(
                 provider_id
             ):
+                self._apply_discovery_metadata(provider, fetched)
                 provider.discovered_models = models
                 provider.models_last_synced_at = synced_at
                 provider.models_last_sync_error = None
@@ -1736,7 +1773,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 last_synced_at=synced_at,
             )
         except Exception as exc:
-            error = Provider._sanitize_connection_message(
+            error = Provider._sanitize_connection_message(  # pylint: disable=protected-access
                 str(exc) or exc.__class__.__name__,
             )
             logger.warning(
@@ -1780,7 +1817,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     ) -> ProviderModelCheckResult:
         """Convert provider errors into stable availability states."""
         checked_at = datetime.now(timezone.utc).isoformat()
-        message = Provider._sanitize_connection_message(
+        message = Provider._sanitize_connection_message(  # pylint: disable=protected-access
             (message or "").strip(),
         )
         http_status = cls._extract_http_status(message)

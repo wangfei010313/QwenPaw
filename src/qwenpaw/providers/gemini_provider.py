@@ -307,8 +307,8 @@ class GeminiProvider(Provider):
             return ModelConnectionResult(
                 success=False,
                 message=(
-                    f"Unknown exception when connecting to model '{model_id}': "
-                    f"{self.connection_error_message(exc)}"
+                    f"Unknown exception when connecting to model "
+                    f"'{model_id}': {self.connection_error_message(exc)}"
                 ),
             )
 
@@ -336,17 +336,19 @@ class GeminiProvider(Provider):
             client = self._client(timeout=timeout)
             response = await client.aio.models.generate_content(
                 model=target,
-                contents="Call qwenpaw_connection_probe with value pong.",
+                contents=("Call qwenpaw_connection_probe with value pong."),
                 config=genai_types.GenerateContentConfig(
                     tools=[
                         genai_types.Tool(function_declarations=[declaration])
                     ],
                     tool_config=genai_types.ToolConfig(
-                        function_calling_config=genai_types.FunctionCallingConfig(
-                            mode="ANY",
-                            allowed_function_names=[
-                                "qwenpaw_connection_probe"
-                            ],
+                        function_calling_config=(
+                            genai_types.FunctionCallingConfig(
+                                mode="ANY",
+                                allowed_function_names=[
+                                    "qwenpaw_connection_probe"
+                                ],
+                            )
                         ),
                     ),
                 ),

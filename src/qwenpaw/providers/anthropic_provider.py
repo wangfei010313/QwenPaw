@@ -272,8 +272,8 @@ class AnthropicProvider(Provider):
             return ModelConnectionResult(
                 success=False,
                 message=(
-                    f"Unknown exception when connecting to model '{model_id}': "
-                    f"{self.connection_error_message(exc)}"
+                    f"Unknown exception when connecting to model "
+                    f"'{model_id}': {self.connection_error_message(exc)}"
                 ),
             )
 
@@ -296,7 +296,9 @@ class AnthropicProvider(Provider):
                 messages=[
                     {
                         "role": "user",
-                        "content": "Call qwenpaw_connection_probe with value pong.",
+                        "content": (
+                            "Call qwenpaw_connection_probe with value pong."
+                        ),
                     },
                 ],
                 tools=[
