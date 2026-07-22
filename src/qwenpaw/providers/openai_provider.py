@@ -141,7 +141,7 @@ class OpenAIProvider(Provider):
             await client.models.list(timeout=timeout)
             return True, ""
         except APIError as exc:
-            detail = str(exc) or getattr(exc, "message", "")
+            detail = self.connection_error_message(exc)
             status = getattr(exc, "status_code", "unknown")
             return (
                 False,
@@ -152,7 +152,7 @@ class OpenAIProvider(Provider):
             return (
                 False,
                 f"Unknown exception when connecting to `{self.base_url}`: "
-                f"{exc}",
+                f"{self.connection_error_message(exc)}",
             )
 
     async def fetch_models(self, timeout: float = 5) -> List[ModelInfo]:
@@ -205,7 +205,7 @@ class OpenAIProvider(Provider):
             async for _ in res:
                 break
         except APIError as exc:
-            detail = str(exc) or getattr(exc, "message", "")
+            detail = self.connection_error_message(exc)
             status = getattr(exc, "status_code", "unknown")
             return ModelConnectionResult(
                 success=False,
@@ -301,7 +301,7 @@ class OpenAIProvider(Provider):
                 success=True, supports_tool_calling=True
             )
         except APIError as exc:
-            detail = str(exc) or getattr(exc, "message", "")
+            detail = self.connection_error_message(exc)
             status = getattr(exc, "status_code", "unknown")
             return ModelConnectionResult(
                 success=False,
@@ -823,7 +823,7 @@ class GitHubModelsProvider(OpenAIProvider):
                 await res.response.aclose()
             return True, ""
         except APIError as exc:
-            detail = str(exc) or getattr(exc, "message", "")
+            detail = self.connection_error_message(exc)
             status = getattr(exc, "status_code", "unknown")
             return (
                 False,
@@ -834,5 +834,5 @@ class GitHubModelsProvider(OpenAIProvider):
             return (
                 False,
                 f"Unknown exception when connecting to `{self.base_url}`: "
-                f"{exc}",
+                f"{self.connection_error_message(exc)}",
             )

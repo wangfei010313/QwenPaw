@@ -400,11 +400,22 @@ class Provider(ProviderInfo, ABC):
     @staticmethod
     def _sanitize_connection_message(message: str) -> str:
         """Remove likely credential values from provider error text."""
-        return re.sub(
-            r"(?i)(api[_ -]?key|authorization|token)[=: ]+[^,; ]+",
-            r"\1=[redacted]",
+        credential_patterns = (
+            r"(?i)(api[_ -]?key|x-api-key|access[_ -]?token|token)"
+            r"(\s*[=:]\s*)[^,;\s]+",
+            r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)" r"[^,;\s]+",
+        )
+        message = re.sub(
+            credential_patterns[0],
+            r"\1\2[redacted]",
             message,
         )
+        message = re.sub(
+            credential_patterns[1],
+            r"\1[redacted]",
+            message,
+        )
+        return message
 
     @classmethod
     def connection_error_message(cls, exc: Exception) -> str:

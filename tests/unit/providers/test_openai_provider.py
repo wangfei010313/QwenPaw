@@ -327,6 +327,28 @@ async def test_check_model_connection_api_error_returns_false(
     assert msg.endswith("failed")
 
 
+async def test_connection_error_redacts_credentials(monkeypatch) -> None:
+    provider = _make_provider()
+
+    class FakeModels:
+        async def list(self, timeout=None):
+            _ = timeout
+            raise RuntimeError(
+                "Authorization: Bearer sk-secret x-api-key=other-secret",
+            )
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
+    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
+
+    ok, message = await provider.check_connection()
+
+    assert ok is False
+    assert "sk-secret" not in message
+    assert "other-secret" not in message
+    assert "[redacted]" in message
+
+
 async def test_update_config_updates_non_none_values_and_get_info() -> None:
     provider = _make_provider(is_custom=True)
 

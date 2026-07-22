@@ -268,7 +268,7 @@ async def configure_provider(
     provider_id: str = Path(...),
     body: ProviderConfigRequest = Body(...),
 ) -> ProviderInfo:
-    ok = manager.update_provider(
+    ok = await manager.update_provider_async(
         provider_id,
         {
             "api_key": body.api_key,
@@ -474,7 +474,7 @@ async def discover_models(
             "base_url": body.base_url if body else None,
         }
         if save:
-            ok = manager.update_provider(provider_id, overrides)
+            ok = await manager.update_provider_async(provider_id, overrides)
             if not ok:
                 raise HTTPException(
                     status_code=404,
@@ -967,7 +967,10 @@ async def discover_openrouter_extended(
         )
 
     if body and body.api_key:
-        manager.update_provider("openrouter", {"api_key": body.api_key})
+        await manager.update_provider_async(
+            "openrouter",
+            {"api_key": body.api_key},
+        )
 
     try:
         models = await provider.fetch_extended_models()

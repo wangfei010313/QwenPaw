@@ -22,7 +22,7 @@ async def test_configure_provider_schedules_model_discovery() -> None:
         require_api_key=True,
     )
     manager = MagicMock()
-    manager.update_provider.return_value = True
+    manager.update_provider_async = AsyncMock(return_value=True)
     manager.get_provider.return_value = provider
     manager.get_provider_info = AsyncMock(
         return_value=ProviderInfo(id="openai", name="OpenAI"),
@@ -38,6 +38,17 @@ async def test_configure_provider_schedules_model_discovery() -> None:
     )
 
     assert result.id == "openai"
+    manager.update_provider_async.assert_awaited_once_with(
+        "openai",
+        {
+            "api_key": "sk-test",
+            "base_url": None,
+            "chat_model": None,
+            "generate_kwargs": {},
+            "custom_headers": None,
+            "auth_mode": None,
+        },
+    )
     assert len(tasks.tasks) == 1
     task = tasks.tasks[0]
     assert task.func == manager.discover_provider_models
@@ -48,7 +59,7 @@ async def test_configure_provider_schedules_model_discovery() -> None:
 async def test_discover_route_returns_sync_status() -> None:
     manager = MagicMock()
     manager.get_provider.return_value = SimpleNamespace()
-    manager.update_provider.return_value = True
+    manager.update_provider_async = AsyncMock(return_value=True)
     manager.discover_provider_models = AsyncMock(
         return_value=SimpleNamespace(
             success=False,
@@ -98,6 +109,7 @@ async def test_discover_preview_does_not_persist_credentials() -> None:
     )
 
     manager.update_provider.assert_not_called()
+    manager.update_provider_async.assert_not_called()
     provider.model_copy.assert_called_once_with(
         update={"api_key": "preview-key"},
     )

@@ -1547,6 +1547,20 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
         return True
 
+    async def update_provider_async(
+        self,
+        provider_id: str,
+        config: Dict,
+    ) -> bool:
+        """Update a provider and persist its snapshot off the event loop."""
+        provider_id = self._normalize_provider_id(provider_id)
+        provider = self.get_provider(provider_id)
+        if provider is None:
+            return False
+        provider.update_config(config)
+        await self.save_provider_config_async(provider_id, provider)
+        return True
+
     def start_local_model_resume(self, local_manager) -> None:
         """Schedule background restore of the active local model server."""
         task = asyncio.create_task(
@@ -1653,10 +1667,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 error=f"Provider '{provider_id}' not found",
             )
 
-        self._discovery_generations[provider_id] = (
-            self._discovery_generations.get(provider_id, 0) + 1
-        )
-        generation = self._discovery_generations[provider_id]
+        generation = None
+        if save:
+            self._discovery_generations[provider_id] = (
+                self._discovery_generations.get(provider_id, 0) + 1
+            )
+            generation = self._discovery_generations[provider_id]
 
         previous_api_ids = {
             model.id
@@ -1720,7 +1736,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 last_synced_at=synced_at,
             )
         except Exception as exc:
-            error = str(exc) or exc.__class__.__name__
+            error = Provider._sanitize_connection_message(
+                str(exc) or exc.__class__.__name__,
+            )
             logger.warning(
                 "Failed to discover models for provider '%s': %s",
                 provider_id,
@@ -1762,7 +1780,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     ) -> ProviderModelCheckResult:
         """Convert provider errors into stable availability states."""
         checked_at = datetime.now(timezone.utc).isoformat()
-        message = (message or "").strip()
+        message = Provider._sanitize_connection_message(
+            (message or "").strip(),
+        )
         http_status = cls._extract_http_status(message)
         normalized = message.lower()
 
@@ -1960,7 +1980,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         # without model config, to avoid false negatives in the UI.
         provider.support_connection_check = False
         self.custom_providers[provider.id] = provider
-        self._save_provider(provider, is_builtin=False)
+        await self.save_provider_config_async(provider.id, provider)
         return await provider.get_info()
 
     def remove_custom_provider(self, provider_id: str) -> bool:
@@ -2119,17 +2139,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 },
             )
 
-        # Save provider config to appropriate location
-        is_plugin = provider_id in self.plugin_providers
-        if is_plugin:
-            provider_info = ProviderInfo(**provider.model_dump())
-            self.plugin_providers[provider_id]["info"] = provider_info
-            self._save_plugin_provider(provider)
-        else:
-            self._save_provider(
-                provider,
-                is_builtin=provider_id in self.builtin_providers,
-            )
+        await self.save_provider_config_async(provider_id, provider)
         return await provider.get_info()
 
     async def update_model_config(
@@ -2151,17 +2161,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 details={"provider_id": provider_id, "model_id": model_id},
             )
 
-        # Save provider config to appropriate location
-        is_plugin = provider_id in self.plugin_providers
-        if is_plugin:
-            provider_info = ProviderInfo(**provider.model_dump())
-            self.plugin_providers[provider_id]["info"] = provider_info
-            self._save_plugin_provider(provider)
-        else:
-            self._save_provider(
-                provider,
-                is_builtin=provider_id in self.builtin_providers,
-            )
+        await self.save_provider_config_async(provider_id, provider)
         return await provider.get_info()
 
     async def delete_model_from_provider(
@@ -2177,17 +2177,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             )
         await provider.delete_model(model_id=model_id)
 
-        # Save provider config to appropriate location
-        is_plugin = provider_id in self.plugin_providers
-        if is_plugin:
-            provider_info = ProviderInfo(**provider.model_dump())
-            self.plugin_providers[provider_id]["info"] = provider_info
-            self._save_plugin_provider(provider)
-        else:
-            self._save_provider(
-                provider,
-                is_builtin=provider_id in self.builtin_providers,
-            )
+        await self.save_provider_config_async(provider_id, provider)
         return await provider.get_info()
 
     async def probe_model_multimodal(
@@ -2257,17 +2247,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                     d.discrepancy_type,
                 )
 
-        # Persist to disk
-        is_plugin = provider_id in self.plugin_providers
-        if is_plugin:
-            provider_info = ProviderInfo(**provider.model_dump())
-            self.plugin_providers[provider_id]["info"] = provider_info
-            self._save_plugin_provider(provider)
-        else:
-            self._save_provider(
-                provider,
-                is_builtin=provider_id in self.builtin_providers,
-            )
+        await self.save_provider_config_async(provider_id, provider)
         return {
             "supports_image": result.supports_image,
             "supports_video": result.supports_video,
@@ -2364,6 +2344,10 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         )
         async with lock:
             snapshot = provider.model_copy(deep=True)
+            if provider_id in self.plugin_providers:
+                self.plugin_providers[provider_id]["info"] = (
+                    ProviderInfo.model_validate(snapshot.model_dump())
+                )
             await asyncio.to_thread(
                 self._save_provider_snapshot,
                 provider_id,

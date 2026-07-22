@@ -103,12 +103,17 @@ class OpenAIResponseProvider(OpenAIProvider):
             async for _ in res:
                 break
             return True, ""
-        except APIError:
-            return False, f"API error when connecting to model '{model_id}'"
-        except Exception:
+        except APIError as exc:
             return (
                 False,
-                f"Unknown exception when connecting to model '{model_id}'",
+                "API error when connecting to model "
+                f"'{model_id}': {self.connection_error_message(exc)}",
+            )
+        except Exception as exc:
+            return (
+                False,
+                "Unknown exception when connecting to model "
+                f"'{model_id}': {self.connection_error_message(exc)}",
             )
 
     async def check_model_compatibility(

@@ -2,6 +2,7 @@
 # pylint: disable=redefined-outer-name,unused-argument,protected-access
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -737,6 +738,114 @@ async def test_discovery_only_model_cannot_activate_until_added(
     await manager.activate_model("openai", "candidate-only")
     assert manager.active_model is not None
     assert manager.active_model.model == "candidate-only"
+
+
+async def test_preview_discovery_does_not_invalidate_saved_refresh(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    call_count = 0
+
+    async def fetch_models(_self, timeout=5):
+        nonlocal call_count
+        _ = timeout
+        call_count += 1
+        if call_count == 1:
+            first_started.set()
+            await release_first.wait()
+            return [ModelInfo(id="saved-model", name="Saved")]
+        return [ModelInfo(id="preview-model", name="Preview")]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+    saved_task = asyncio.create_task(
+        manager.discover_provider_models("openai", save=True),
+    )
+    await first_started.wait()
+    preview = await manager.discover_provider_models(
+        "openai",
+        save=False,
+        provider_override=provider.model_copy(deep=True),
+    )
+    release_first.set()
+    saved = await saved_task
+
+    assert preview.models[0].id == "preview-model"
+    assert saved.success is True
+    assert provider.get_discovered_model_info("saved-model") is not None
+
+
+async def test_plugin_discovery_and_check_update_fresh_provider_instance(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    plugin_id = "plugin-openai"
+    manager.plugin_providers[plugin_id] = {
+        "info": ProviderInfo(
+            id=plugin_id,
+            name="Plugin OpenAI",
+            base_url="https://plugin.example/v1",
+            chat_model="OpenAIChatModel",
+        ),
+        "class": OpenAIProvider,
+    }
+
+    async def fetch_models(_self, timeout=5):
+        _ = timeout
+        return [ModelInfo(id="plugin-model", name="Plugin Model")]
+
+    async def check_model_compatibility(_self, model_id, timeout=5):
+        _ = model_id, timeout
+        return provider_manager_module.ModelConnectionResult(
+            success=True,
+            supports_tool_calling=True,
+        )
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "check_model_compatibility",
+        check_model_compatibility,
+    )
+
+    discovery = await manager.discover_provider_models(plugin_id)
+    check = await manager.check_provider_model(plugin_id, "plugin-model")
+    refreshed = manager.get_provider(plugin_id)
+
+    assert discovery.success is True
+    assert check.status == "available"
+    assert refreshed is not None
+    model = refreshed.get_discovered_model_info("plugin-model")
+    assert model is not None
+    assert model.availability_status == "available"
+    assert model.supports_tool_calling is True
+
+
+async def test_discovery_error_redacts_credentials_before_persisting(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+
+    async def fetch_models(_self, timeout=5):
+        _ = timeout
+        raise RuntimeError("api_key=discovery-secret")
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai")
+    provider = manager.get_provider("openai")
+
+    assert result.success is False
+    assert "discovery-secret" not in result.error
+    assert result.error == "api_key=[redacted]"
+    assert provider is not None
+    assert provider.models_last_sync_error == result.error
 
 
 async def test_add_model_to_provider_duplicate_id_raises(
