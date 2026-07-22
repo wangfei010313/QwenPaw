@@ -124,9 +124,8 @@ def test_builtin_zhipu_providers_registered(isolated_secret_dir) -> None:
         assert isinstance(provider, OpenAIProvider)
         assert provider.base_url == expected["base_url"]
         assert provider.freeze_url is True
-        assert (
-            provider.support_connection_check
-            == expected["support_connection_check"]
+        assert provider.support_connection_check == (
+            expected["support_connection_check"]
         )
         model_ids = [m.id for m in provider.models]
         assert len(model_ids) > 0
@@ -946,9 +945,7 @@ async def test_add_discovered_model_copies_catalog_metadata(
     )
 
     assert all(model.id != "remote-candidate" for model in info.models)
-    added = next(
-        model for model in info.extra_models if model.id == "remote-candidate"
-    )
+    added = next(m for m in info.extra_models if m.id == "remote-candidate")
     assert added.source == "user"
     assert added.max_input_length_auto_detected == 256_000
     assert added.max_tokens == 16_384

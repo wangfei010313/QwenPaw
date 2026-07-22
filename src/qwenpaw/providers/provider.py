@@ -403,7 +403,7 @@ class Provider(ProviderInfo, ABC):  # pylint: disable=too-many-public-methods
         credential_patterns = (
             r"(?i)(api[_ -]?key|x-api-key|access[_ -]?token|token)"
             r"(\s*[=:]\s*)[^,;\s]+",
-            r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)" r"[^,;\s]+",
+            r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)[^,;\s]+",
         )
         message = re.sub(
             credential_patterns[0],

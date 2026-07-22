@@ -214,7 +214,8 @@ def _validate_model_slot(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Model '{model_id}' not found in provider '{provider_id}'."
+                f"Model '{model_id}' not found in provider "
+                f"'{provider_id}'."
             ),
         )
     model_info = provider.get_model_info(model_id)
@@ -401,7 +402,7 @@ class DiscoverModelsResponse(BaseModel):
     added_count: int = Field(
         default=0,
         description=(
-            "How many new models were added into the discovery catalog"
+            "How many new models were added into the " "discovery catalog"
         ),
     )
     last_synced_at: Optional[str] = Field(default=None)

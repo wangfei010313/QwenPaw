@@ -274,7 +274,8 @@ class GeminiProvider(Provider):
         target = (model_id or "").strip()
         if not target:
             return ModelConnectionResult(
-                success=False, message="Empty model ID"
+                success=False,
+                message="Empty model ID",
             )
 
         try:
@@ -288,7 +289,9 @@ class GeminiProvider(Provider):
             return ModelConnectionResult(success=True)
         except genai_errors.APIError as exc:
             status = getattr(exc, "code", None) or getattr(
-                exc, "status_code", None
+                exc,
+                "status_code",
+                None,
             )
             return ModelConnectionResult(
                 success=False,
@@ -300,7 +303,9 @@ class GeminiProvider(Provider):
                 error_kind=(
                     "permission_denied"
                     if status in (401, 403)
-                    else "model_not_found" if status == 404 else None
+                    else "model_not_found"
+                    if status == 404
+                    else None
                 ),
             )
         except Exception as exc:
@@ -321,7 +326,8 @@ class GeminiProvider(Provider):
         target = (model_id or "").strip()
         if not target:
             return ModelConnectionResult(
-                success=False, message="Empty model ID"
+                success=False,
+                message="Empty model ID",
             )
         declaration = genai_types.FunctionDeclaration(
             name="qwenpaw_connection_probe",
@@ -339,14 +345,14 @@ class GeminiProvider(Provider):
                 contents=("Call qwenpaw_connection_probe with value pong."),
                 config=genai_types.GenerateContentConfig(
                     tools=[
-                        genai_types.Tool(function_declarations=[declaration])
+                        genai_types.Tool(function_declarations=[declaration]),
                     ],
                     tool_config=genai_types.ToolConfig(
                         function_calling_config=(
                             genai_types.FunctionCallingConfig(
                                 mode="ANY",
                                 allowed_function_names=[
-                                    "qwenpaw_connection_probe"
+                                    "qwenpaw_connection_probe",
                                 ],
                             )
                         ),
@@ -372,7 +378,9 @@ class GeminiProvider(Provider):
             )
         except genai_errors.APIError as exc:
             status = getattr(exc, "code", None) or getattr(
-                exc, "status_code", None
+                exc,
+                "status_code",
+                None,
             )
             return ModelConnectionResult(
                 success=False,
@@ -384,7 +392,9 @@ class GeminiProvider(Provider):
                     else (
                         "model_not_found"
                         if status == 404
-                        else "incompatible_api" if status == 400 else None
+                        else "incompatible_api"
+                        if status == 400
+                        else None
                     )
                 ),
                 supports_tool_calling=False if status == 400 else None,
@@ -680,9 +690,9 @@ class _GeminiChatModelCompat:
                     formatted = await self.formatter.format(messages)
                     config: dict[str, Any] = {**merged}
                     if self.parameters.max_tokens is not None:
-                        config["max_output_tokens"] = (
-                            self.parameters.max_tokens
-                        )
+                        config[
+                            "max_output_tokens"
+                        ] = self.parameters.max_tokens
                     if self.parameters.temperature is not None:
                         config["temperature"] = self.parameters.temperature
                     if self.parameters.top_p is not None:

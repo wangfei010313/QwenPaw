@@ -1756,7 +1756,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             models = list(by_id.values())
 
             if save and generation == self._discovery_generations.get(
-                provider_id
+                provider_id,
             ):
                 self._apply_discovery_metadata(provider, fetched)
                 provider.discovered_models = models
@@ -1773,7 +1773,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 last_synced_at=synced_at,
             )
         except Exception as exc:
-            error = Provider._sanitize_connection_message(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            error = Provider._sanitize_connection_message(
                 str(exc) or exc.__class__.__name__,
             )
             logger.warning(
@@ -1782,7 +1783,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 error,
             )
             if save and generation == self._discovery_generations.get(
-                provider_id
+                provider_id,
             ):
                 provider.models_last_sync_error = error
                 await self.save_provider_config_async(provider_id, provider)
@@ -1817,7 +1818,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
     ) -> ProviderModelCheckResult:
         """Convert provider errors into stable availability states."""
         checked_at = datetime.now(timezone.utc).isoformat()
-        message = Provider._sanitize_connection_message(  # pylint: disable=protected-access
+        # pylint: disable=protected-access
+        message = Provider._sanitize_connection_message(
             (message or "").strip(),
         )
         http_status = cls._extract_http_status(message)
@@ -2382,9 +2384,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         async with lock:
             snapshot = provider.model_copy(deep=True)
             if provider_id in self.plugin_providers:
-                self.plugin_providers[provider_id]["info"] = (
-                    ProviderInfo.model_validate(snapshot.model_dump())
-                )
+                self.plugin_providers[provider_id][
+                    "info"
+                ] = ProviderInfo.model_validate(snapshot.model_dump())
             await asyncio.to_thread(
                 self._save_provider_snapshot,
                 provider_id,
@@ -2392,7 +2394,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             )
 
     def _save_provider_snapshot(
-        self, provider_id: str, provider: Provider
+        self,
+        provider_id: str,
+        provider: Provider,
     ) -> None:
         """Serialize and atomically write a provider snapshot."""
         is_plugin = provider_id in self.plugin_providers

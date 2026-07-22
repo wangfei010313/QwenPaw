@@ -125,7 +125,8 @@ class OpenAIResponseProvider(OpenAIProvider):
         model_id = (model_id or "").strip()
         if not model_id:
             return ModelConnectionResult(
-                success=False, message="Empty model ID"
+                success=False,
+                message="Empty model ID",
             )
         client = self._client(timeout=timeout)
         try:

@@ -227,7 +227,8 @@ class AnthropicProvider(Provider):
         target = (model_id or "").strip()
         if not target:
             return ModelConnectionResult(
-                success=False, message="Empty model ID"
+                success=False,
+                message="Empty model ID",
             )
 
         body = {
@@ -265,7 +266,9 @@ class AnthropicProvider(Provider):
                 error_kind=(
                     "permission_denied"
                     if status in (401, 403)
-                    else "model_not_found" if status == 404 else None
+                    else "model_not_found"
+                    if status == 404
+                    else None
                 ),
             )
         except Exception as exc:
@@ -286,7 +289,8 @@ class AnthropicProvider(Provider):
         target = (model_id or "").strip()
         if not target:
             return ModelConnectionResult(
-                success=False, message="Empty model ID"
+                success=False,
+                message="Empty model ID",
             )
         try:
             client = self._client(timeout=timeout)
@@ -346,7 +350,9 @@ class AnthropicProvider(Provider):
                     else (
                         "model_not_found"
                         if status == 404
-                        else "incompatible_api" if status == 400 else None
+                        else "incompatible_api"
+                        if status == 400
+                        else None
                     )
                 ),
                 supports_tool_calling=False if status == 400 else None,
@@ -559,17 +565,17 @@ class _AnthropicChatModelCompat:
                 if self._qp_default_headers:
                     client_kwargs["default_headers"] = self._qp_default_headers
                 if self._qp_auth_mode == "auth_token":
-                    client_kwargs["auth_token"] = (
-                        self.credential.api_key.get_secret_value()
-                    )
+                    client_kwargs[
+                        "auth_token"
+                    ] = self.credential.api_key.get_secret_value()
                     if self._qp_strip_http_client is not None:
-                        client_kwargs["http_client"] = (
-                            self._qp_strip_http_client
-                        )
+                        client_kwargs[
+                            "http_client"
+                        ] = self._qp_strip_http_client
                 else:
-                    client_kwargs["api_key"] = (
-                        self.credential.api_key.get_secret_value()
-                    )
+                    client_kwargs[
+                        "api_key"
+                    ] = self.credential.api_key.get_secret_value()
 
                 self._qp_cached_client = anthropic.AsyncAnthropic(
                     **client_kwargs,

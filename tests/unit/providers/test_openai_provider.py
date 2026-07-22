@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import qwenpaw.providers.openai_provider as openai_provider_module
+from qwenpaw.providers.dashscope_provider import DashScopeProvider
 from qwenpaw.providers.openai_provider import OpenAIProvider
 
 
@@ -133,7 +134,7 @@ async def test_check_model_connection_success(monkeypatch) -> None:
             call = SimpleNamespace(function=function)
             delta = SimpleNamespace(tool_calls=[call])
             return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])]
+                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
             )
 
     fake_client = SimpleNamespace(
@@ -152,10 +153,8 @@ async def test_check_model_connection_success(monkeypatch) -> None:
     assert captured[0]["stream"] is True
     assert "tools" not in captured[0]
     assert captured[1]["tools"][0]["type"] == "function"
-    assert (
-        captured[1]["tools"][0]["function"]["name"]
-        == "qwenpaw_connection_probe"
-    )
+    probe_name = "qwenpaw_connection_probe"
+    assert captured[1]["tools"][0]["function"]["name"] == probe_name
 
 
 async def test_check_gpt5_model_uses_max_completion_tokens(
@@ -189,7 +188,7 @@ async def test_check_gpt5_model_uses_max_completion_tokens(
             call = SimpleNamespace(function=function)
             delta = SimpleNamespace(tool_calls=[call])
             return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])]
+                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
             )
 
     fake_client = SimpleNamespace(
@@ -242,6 +241,67 @@ async def test_check_model_connection_rejects_missing_tool_support(
     assert call_count == 2
     assert msg.startswith("Tool calling check failed for model")
     assert msg.endswith("The tool call is not supported")
+
+
+async def test_dashscope_tool_probe_retries_with_thinking_disabled(
+    monkeypatch,
+) -> None:
+    provider = DashScopeProvider(
+        id="dashscope",
+        name="DashScope",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="sk-test",
+    )
+    captured: list[dict] = []
+
+    class FakeStream:
+        def __init__(self, chunks=None):
+            self._chunks = iter(chunks or [])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.append(kwargs)
+            if "tools" not in kwargs:
+                return FakeStream()
+            if "extra_body" not in kwargs:
+                raise RuntimeError(
+                    "The tool_choice parameter does not support being set "
+                    "to required or object in thinking mode",
+                )
+            function = SimpleNamespace(
+                name="qwenpaw_connection_probe",
+                arguments='{"value":"pong"}',
+            )
+            call = SimpleNamespace(function=function)
+            delta = SimpleNamespace(tool_calls=[call])
+            return FakeStream(
+                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
+            )
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
+    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
+
+    result = await provider.check_model_connection("qwen3.7-max")
+
+    assert result.success is True
+    assert result.supports_tool_calling is True
+    assert len(captured) == 3
+    assert captured[2]["extra_body"] == {
+        "enable_thinking": False,
+        "thinking": {"type": "disabled"},
+    }
 
 
 def test_token_limit_kwargs_handles_reasoning_model_ids() -> None:

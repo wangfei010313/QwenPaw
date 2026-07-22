@@ -167,7 +167,20 @@ class OpenAIProvider(Provider):
         except Exception:
             return []
 
-    # pylint: disable=too-many-return-statements
+    # pylint: disable=useless-return
+    def _tool_probe_retry_extra_body(
+        self,
+        exc: APIError,
+    ) -> dict[str, Any] | None:
+        """Return provider-specific retry options for a tool probe.
+
+        Subclasses may override this to provide provider-specific retry
+        options when a tool probe fails with a specific API error.
+        """
+        _ = exc
+        return None
+
+    # pylint: disable=too-many-return-statements,too-many-branches
     async def check_model_connection(
         self,
         model_id: str,
@@ -177,7 +190,8 @@ class OpenAIProvider(Provider):
         model_id = (model_id or "").strip()
         if not model_id:
             return ModelConnectionResult(
-                success=False, message="Empty model ID"
+                success=False,
+                message="Empty model ID",
             )
 
         try:
@@ -242,36 +256,56 @@ class OpenAIProvider(Provider):
                 },
             },
         }
-        try:
-            res = await client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Call qwenpaw_connection_probe "
-                                    "with value pong."
-                                ),
-                            },
-                        ],
-                    },
-                ],
-                tools=[probe_tool],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "qwenpaw_connection_probe"},
+        tool_probe_kwargs = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Call qwenpaw_connection_probe "
+                                "with value pong."
+                            ),
+                        },
+                    ],
                 },
-                **common_kwargs,
-            )
+            ],
+            "tools": [probe_tool],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "qwenpaw_connection_probe"},
+            },
+            **common_kwargs,
+        }
+        retry_extra_body: dict[str, Any] | None = None
+        try:
+            while True:
+                try:
+                    request_kwargs = dict(tool_probe_kwargs)
+                    if retry_extra_body is not None:
+                        request_kwargs["extra_body"] = retry_extra_body
+                    res = await client.chat.completions.create(
+                        **request_kwargs,
+                    )
+                    break
+                except APIError as exc:
+                    if retry_extra_body is None:
+                        # pylint: disable=assignment-from-none
+                        probe_retry = self._tool_probe_retry_extra_body(exc)
+                        if probe_retry:
+                            retry_extra_body = probe_retry
+                            continue
+                    raise
             tool_name = None
             arguments = ""
             async for chunk in res:
                 for choice in getattr(chunk, "choices", None) or []:
                     for call in (
                         getattr(
-                            getattr(choice, "delta", None), "tool_calls", None
+                            getattr(choice, "delta", None),
+                            "tool_calls",
+                            None,
                         )
                         or []
                     ):
@@ -302,7 +336,8 @@ class OpenAIProvider(Provider):
                     supports_tool_calling=False,
                 )
             return ModelConnectionResult(
-                success=True, supports_tool_calling=True
+                success=True,
+                supports_tool_calling=True,
             )
         except APIError as exc:
             detail = self.connection_error_message(exc)
