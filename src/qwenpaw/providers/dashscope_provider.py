@@ -75,20 +75,25 @@ class DashScopeProvider(OpenAIProvider):
             model for model in models if not self._is_non_chat_model(model.id)
         ]
 
-    def _tool_probe_retry_extra_body(self, exc: Exception) -> dict | None:
-        """Disable thinking for DashScope's forced tool-call probe.
+    def _tool_probe_retry_overrides(self, exc: Exception) -> dict | None:
+        """Retry known DashScope tool probe request-shape conflicts.
 
         DashScope rejects an object-form ``tool_choice`` in thinking mode,
         although the model can still serve regular chats and tool calls when
-        thinking is disabled for that request.
+        thinking is disabled for that request. Some DeepSeek models only
+        accept the string form ``tool_choice=\"auto\"``.
         """
         message = str(exc).lower()
-        if "tool_choice" not in message or "thinking mode" not in message:
+        if "tool_choice" not in message:
             return None
-        return {
-            "enable_thinking": False,
-            "thinking": {"type": "disabled"},
-        }
+        if "thinking mode" in message:
+            return {
+                "extra_body": {
+                    "enable_thinking": False,
+                    "thinking": {"type": "disabled"},
+                },
+            }
+        return super()._tool_probe_retry_overrides(exc)
 
     def _is_builtin_model(self, model_id: str) -> bool:
         return any(m.id == model_id for m in self.models)

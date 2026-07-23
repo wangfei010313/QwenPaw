@@ -168,7 +168,7 @@ class OpenAIProvider(Provider):
             return []
 
     # pylint: disable=useless-return
-    def _tool_probe_retry_extra_body(
+    def _tool_probe_retry_overrides(
         self,
         exc: APIError,
     ) -> dict[str, Any] | None:
@@ -177,7 +177,21 @@ class OpenAIProvider(Provider):
         Subclasses may override this to provide provider-specific retry
         options when a tool probe fails with a specific API error.
         """
-        _ = exc
+        message = str(exc).lower()
+        # Some OpenAI-compatible services only accept the string variants
+        # of tool_choice. Keep the tools request and validate the returned
+        # call, so this does not turn a plain-chat response into a pass.
+        accepts_auto_only = (
+            '["none", "auto"]' in message
+            or "['none', 'auto']" in message
+            or (
+                "must be one of" in message
+                and "none" in message
+                and "auto" in message
+            )
+        )
+        if "tool_choice" in message and accepts_auto_only:
+            return {"tool_choice": "auto"}
         return None
 
     # pylint: disable=too-many-return-statements,too-many-branches
@@ -278,23 +292,31 @@ class OpenAIProvider(Provider):
             },
             **common_kwargs,
         }
-        retry_extra_body: dict[str, Any] | None = None
+        retry_overrides: dict[str, Any] = {}
+        retry_attempts = 0
         try:
             while True:
                 try:
                     request_kwargs = dict(tool_probe_kwargs)
-                    if retry_extra_body is not None:
-                        request_kwargs["extra_body"] = retry_extra_body
+                    if retry_overrides:
+                        request_kwargs.update(retry_overrides)
                     res = await client.chat.completions.create(
                         **request_kwargs,
                     )
                     break
                 except APIError as exc:
-                    if retry_extra_body is None:
-                        # pylint: disable=assignment-from-none
-                        probe_retry = self._tool_probe_retry_extra_body(exc)
-                        if probe_retry:
-                            retry_extra_body = probe_retry
+                    # At most two distinct, documented compatibility
+                    # adjustments may be needed (for example, disabling
+                    # thinking and switching tool_choice to "auto").
+                    probe_retry = self._tool_probe_retry_overrides(exc)
+                    if probe_retry and retry_attempts < 2:
+                        updated_overrides = {
+                            **retry_overrides,
+                            **probe_retry,
+                        }
+                        if updated_overrides != retry_overrides:
+                            retry_overrides = updated_overrides
+                            retry_attempts += 1
                             continue
                     raise
             tool_name = None
