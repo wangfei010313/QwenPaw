@@ -2374,9 +2374,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         async with lock:
             snapshot = provider.model_copy(deep=True)
             if provider_id in self.plugin_providers:
-                self.plugin_providers[provider_id]["info"] = (
-                    ProviderInfo.model_validate(snapshot.model_dump())
-                )
+                self.plugin_providers[provider_id][
+                    "info"
+                ] = ProviderInfo.model_validate(snapshot.model_dump())
             await asyncio.to_thread(
                 self._save_provider_snapshot,
                 provider_id,
