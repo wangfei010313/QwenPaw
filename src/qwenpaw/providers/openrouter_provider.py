@@ -364,7 +364,7 @@ class OpenRouterProvider(Provider):
         model_id: str,
         timeout: float = 30,
     ) -> ModelConnectionResult:
-        """Check a model through the OpenAI-compatible tool probe."""
+        """Check a model through a basic OpenAI-compatible chat request."""
         from .openai_provider import OpenAIProvider
 
         return await OpenAIProvider.check_model_connection(

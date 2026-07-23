@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import qwenpaw.providers.openai_provider as openai_provider_module
-from qwenpaw.providers.dashscope_provider import DashScopeProvider
 from qwenpaw.providers.openai_provider import OpenAIProvider
 
 
@@ -125,17 +124,7 @@ async def test_check_model_connection_success(monkeypatch) -> None:
     class FakeCompletions:
         async def create(self, **kwargs):
             captured.append(kwargs)
-            if "tools" not in kwargs:
-                return FakeStream()
-            function = SimpleNamespace(
-                name="qwenpaw_connection_probe",
-                arguments='{"value":"pong"}',
-            )
-            call = SimpleNamespace(function=function)
-            delta = SimpleNamespace(tool_calls=[call])
-            return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
-            )
+            return FakeStream()
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions()),
@@ -146,15 +135,13 @@ async def test_check_model_connection_success(monkeypatch) -> None:
 
     assert ok is True
     assert msg == ""
-    assert len(captured) == 2
+    assert len(captured) == 1
     assert captured[0]["model"] == "gpt-4o-mini"
     assert captured[0]["timeout"] == 4
     assert captured[0]["max_tokens"] == 20
     assert captured[0]["stream"] is True
     assert "tools" not in captured[0]
-    assert captured[1]["tools"][0]["type"] == "function"
-    probe_name = "qwenpaw_connection_probe"
-    assert captured[1]["tools"][0]["function"]["name"] == probe_name
+    assert "tool_choice" not in captured[0]
 
 
 async def test_check_gpt5_model_uses_max_completion_tokens(
@@ -179,17 +166,7 @@ async def test_check_gpt5_model_uses_max_completion_tokens(
     class FakeCompletions:
         async def create(self, **kwargs):
             captured.append(kwargs)
-            if "tools" not in kwargs:
-                return FakeStream()
-            function = SimpleNamespace(
-                name="qwenpaw_connection_probe",
-                arguments='{"value":"pong"}',
-            )
-            call = SimpleNamespace(function=function)
-            delta = SimpleNamespace(tool_calls=[call])
-            return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
-            )
+            return FakeStream()
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions()),
@@ -200,284 +177,9 @@ async def test_check_gpt5_model_uses_max_completion_tokens(
 
     assert ok is True
     assert msg == ""
+    assert len(captured) == 1
     assert captured[0]["max_completion_tokens"] == 20
     assert "max_tokens" not in captured[0]
-    assert captured[1]["max_completion_tokens"] == 20
-
-
-async def test_check_model_connection_rejects_missing_tool_support(
-    monkeypatch,
-) -> None:
-    provider = _make_provider()
-    call_count = 0
-
-    class FakeStream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if "tools" in kwargs:
-                raise RuntimeError("The tool call is not supported")
-            return FakeStream()
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions()),
-    )
-    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
-    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
-
-    ok, msg = await provider.check_model_connection(
-        "deepseek-r1-distill-qwen-14b",
-        timeout=4,
-    )
-
-    assert ok is False
-    assert call_count == 2
-    assert msg.startswith("Tool calling check failed for model")
-    assert msg.endswith("The tool call is not supported")
-
-
-async def test_dashscope_tool_probe_retries_with_thinking_disabled(
-    monkeypatch,
-) -> None:
-    provider = DashScopeProvider(
-        id="dashscope",
-        name="DashScope",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key="sk-test",
-    )
-    captured: list[dict] = []
-
-    class FakeStream:
-        def __init__(self, chunks=None):
-            self._chunks = iter(chunks or [])
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            try:
-                return next(self._chunks)
-            except StopIteration as exc:
-                raise StopAsyncIteration from exc
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            captured.append(kwargs)
-            if "tools" not in kwargs:
-                return FakeStream()
-            if "extra_body" not in kwargs:
-                raise RuntimeError(
-                    "The tool_choice parameter does not support being set "
-                    "to required or object in thinking mode",
-                )
-            function = SimpleNamespace(
-                name="qwenpaw_connection_probe",
-                arguments='{"value":"pong"}',
-            )
-            call = SimpleNamespace(function=function)
-            delta = SimpleNamespace(tool_calls=[call])
-            return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
-            )
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions()),
-    )
-    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
-    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
-
-    result = await provider.check_model_connection("qwen3.7-max")
-
-    assert result.success is True
-    assert result.supports_tool_calling is True
-    assert len(captured) == 3
-    assert captured[2]["extra_body"] == {
-        "enable_thinking": False,
-        "thinking": {"type": "disabled"},
-    }
-
-
-async def test_dashscope_tool_probe_retries_with_auto_tool_choice(
-    monkeypatch,
-) -> None:
-    provider = DashScopeProvider(
-        id="dashscope",
-        name="DashScope",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key="sk-test",
-    )
-    captured: list[dict] = []
-
-    class FakeStream:
-        def __init__(self, chunks=None):
-            self._chunks = iter(chunks or [])
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            try:
-                return next(self._chunks)
-            except StopIteration as exc:
-                raise StopAsyncIteration from exc
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            captured.append(kwargs)
-            if "tools" not in kwargs:
-                return FakeStream()
-            if isinstance(kwargs["tool_choice"], dict):
-                raise RuntimeError(
-                    "<400> InternalError.Algo.InvalidParameter: "
-                    "tool_choice is one of the strings that should be "
-                    '["none", "auto"]',
-                )
-            function = SimpleNamespace(
-                name="qwenpaw_connection_probe",
-                arguments='{"value":"pong"}',
-            )
-            call = SimpleNamespace(function=function)
-            delta = SimpleNamespace(tool_calls=[call])
-            return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
-            )
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions()),
-    )
-    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
-    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
-
-    result = await provider.check_model_connection("deepseek-r1")
-
-    assert result.success is True
-    assert result.supports_tool_calling is True
-    assert len(captured) == 3
-    assert captured[2]["tool_choice"] == "auto"
-
-
-async def test_dashscope_tool_probe_retries_after_stream_error(
-    monkeypatch,
-) -> None:
-    provider = DashScopeProvider(
-        id="dashscope",
-        name="DashScope",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key="sk-test",
-    )
-    captured: list[dict] = []
-
-    class FakeStream:
-        def __init__(self, chunks=None, error=None):
-            self._chunks = iter(chunks or [])
-            self._error = error
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._error is not None:
-                error, self._error = self._error, None
-                raise error
-            try:
-                return next(self._chunks)
-            except StopIteration as exc:
-                raise StopAsyncIteration from exc
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            captured.append(kwargs)
-            if "tools" not in kwargs:
-                return FakeStream()
-            if isinstance(kwargs["tool_choice"], dict):
-                return FakeStream(
-                    error=RuntimeError(
-                        "<400> InternalError.Algo.InvalidParameter: "
-                        "tool_choice is one of the strings that should be "
-                        '["none", "auto"]',
-                    ),
-                )
-            function = SimpleNamespace(
-                name="qwenpaw_connection_probe",
-                arguments='{"value":"pong"}',
-            )
-            call = SimpleNamespace(function=function)
-            delta = SimpleNamespace(tool_calls=[call])
-            return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
-            )
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions()),
-    )
-    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
-    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
-
-    result = await provider.check_model_connection("deepseek-r1")
-
-    assert result.success is True
-    assert result.supports_tool_calling is True
-    assert len(captured) == 3
-    assert captured[2]["tool_choice"] == "auto"
-
-
-async def test_tool_probe_retries_with_auto_tool_choice_for_compat_api(
-    monkeypatch,
-) -> None:
-    provider = _make_provider()
-    captured: list[dict] = []
-
-    class FakeStream:
-        def __init__(self, chunks=None):
-            self._chunks = iter(chunks or [])
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            try:
-                return next(self._chunks)
-            except StopIteration as exc:
-                raise StopAsyncIteration from exc
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            captured.append(kwargs)
-            if "tools" not in kwargs:
-                return FakeStream()
-            if isinstance(kwargs["tool_choice"], dict):
-                raise RuntimeError(
-                    'tool_choice must be one of ["none", "auto"]',
-                )
-            function = SimpleNamespace(
-                name="qwenpaw_connection_probe",
-                arguments='{"value":"pong"}',
-            )
-            call = SimpleNamespace(function=function)
-            delta = SimpleNamespace(tool_calls=[call])
-            return FakeStream(
-                [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])],
-            )
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions()),
-    )
-    monkeypatch.setattr(provider, "_client", lambda timeout=5: fake_client)
-    monkeypatch.setattr(openai_provider_module, "APIError", Exception)
-
-    result = await provider.check_model_connection("compatible-model")
-
-    assert result.success is True
-    assert result.supports_tool_calling is True
-    assert len(captured) == 3
-    assert captured[2]["tool_choice"] == "auto"
 
 
 def test_token_limit_kwargs_handles_reasoning_model_ids() -> None:

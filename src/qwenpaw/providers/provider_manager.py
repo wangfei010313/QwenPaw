@@ -1815,6 +1815,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         cls,
         success: bool,
         message: str,
+        *,
+        http_status: int | None = None,
+        error_kind: str | None = None,
     ) -> ProviderModelCheckResult:
         """Convert provider errors into stable availability states."""
         checked_at = datetime.now(timezone.utc).isoformat()
@@ -1822,7 +1825,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         message = Provider._sanitize_connection_message(
             (message or "").strip(),
         )
-        http_status = cls._extract_http_status(message)
+        if http_status is None:
+            http_status = cls._extract_http_status(message)
         normalized = message.lower()
 
         if success:
@@ -1860,9 +1864,6 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         )
         incompatible_markers = (
             "unsupported model",
-            "tool call is not supported",
-            "tool calling is not supported",
-            "function calling is not supported",
             "does not support chat",
             "not support chat",
             "chat completions is not supported",
@@ -1874,7 +1875,14 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             "不支持 chat",
         )
 
-        if http_status in (401, 403) or any(
+        if error_kind in {
+            "permission_denied",
+            "model_not_found",
+            "incompatible_api",
+        }:
+            status = error_kind
+            retryable = False
+        elif http_status in (401, 403) or any(
             marker in normalized for marker in permission_markers
         ):
             status = "permission_denied"
@@ -1918,27 +1926,17 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 message=f"Provider '{provider_id}' not found.",
             )
 
-        raw_result = await provider.check_model_compatibility(
+        raw_result = await provider.check_model_connection(
             model_id=model_id,
             timeout=timeout,
         )
-        supports_tool_calling = None
         if isinstance(raw_result, ModelConnectionResult):
-            supports_tool_calling = raw_result.supports_tool_calling
             result = self._classify_model_check(
                 raw_result.success,
                 raw_result.message,
+                http_status=raw_result.http_status,
+                error_kind=raw_result.error_kind,
             )
-            result.http_status = raw_result.http_status or result.http_status
-            if raw_result.error_kind == "permission_denied":
-                result.status = "permission_denied"
-                result.retryable = False
-            elif raw_result.error_kind == "model_not_found":
-                result.status = "model_not_found"
-                result.retryable = False
-            elif raw_result.error_kind == "incompatible_api":
-                result.status = "incompatible_api"
-                result.retryable = False
         else:
             success, message = raw_result
             result = self._classify_model_check(success, message)
@@ -1958,10 +1956,6 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 model.availability_http_status = result.http_status
                 model.availability_retryable = result.retryable
                 model.availability_checked_at = result.checked_at
-                if supports_tool_calling is True:
-                    model.supports_tool_calling = True
-                elif supports_tool_calling is False:
-                    model.supports_tool_calling = False
                 changed = True
 
         if changed:
@@ -2050,15 +2044,11 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 details={"provider_id": provider_id, "model_id": model_id},
             )
         model_info = provider.get_model_info(model_id)
-        if model_info and (
-            model_info.supports_tool_calling is False
-            or model_info.availability_status
-            in {
-                "permission_denied",
-                "model_not_found",
-                "incompatible_api",
-            }
-        ):
+        if model_info and model_info.availability_status in {
+            "permission_denied",
+            "model_not_found",
+            "incompatible_api",
+        }:
             reason = (
                 model_info.availability_message
                 or model_info.availability_status
@@ -2384,9 +2374,9 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         async with lock:
             snapshot = provider.model_copy(deep=True)
             if provider_id in self.plugin_providers:
-                self.plugin_providers[provider_id][
-                    "info"
-                ] = ProviderInfo.model_validate(snapshot.model_dump())
+                self.plugin_providers[provider_id]["info"] = (
+                    ProviderInfo.model_validate(snapshot.model_dump())
+                )
             await asyncio.to_thread(
                 self._save_provider_snapshot,
                 provider_id,

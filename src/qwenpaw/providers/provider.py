@@ -72,10 +72,6 @@ class ModelInfo(BaseModel):
     availability_http_status: int | None = Field(default=None)
     availability_retryable: bool = Field(default=True)
     availability_checked_at: str | None = Field(default=None)
-    supports_tool_calling: bool | None = Field(
-        default=None,
-        description="Whether the model accepts OpenAI-style tool requests.",
-    )
     config_overrides: List[str] = Field(
         default_factory=list,
         description="Model fields explicitly changed by the user.",
@@ -119,17 +115,28 @@ class ModelInfo(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _compat_preserve_thinking(cls, data: Any) -> Any:
-        """Accept legacy ``preserve_thinking`` key as alias."""
-        if isinstance(data, dict) and "preserve_thinking" in data:
+        """Normalize legacy model fields and obsolete probe results."""
+        if not isinstance(data, dict):
+            return data
+        if "preserve_thinking" in data:
             data.setdefault("relay_reasoning", data.pop("preserve_thinking"))
-        # Availability checks created before tool probing only proved basic
-        # chat support. Do not treat those cached successes as agent-ready.
+
+        message = str(data.get("availability_message") or "").lower()
+        obsolete_tool_probe = (
+            data.get("supports_tool_calling") is False
+            or "tool probe" in message
+            or "tool calling check failed" in message
+            or "tool_choice" in message
+        )
         if (
-            isinstance(data, dict)
-            and data.get("availability_status") == "available"
-            and "supports_tool_calling" not in data
+            data.get("availability_status") == "incompatible_api"
+            and obsolete_tool_probe
         ):
             data["availability_status"] = "unverified"
+            data["availability_message"] = None
+            data["availability_http_status"] = None
+            data["availability_retryable"] = True
+            data["availability_checked_at"] = None
         return data
 
     thinking_enabled: bool | None = Field(
@@ -190,13 +197,12 @@ class ExtendedModelInfo(ModelInfo):
 
 
 class ModelConnectionResult(BaseModel):
-    """Connection evidence returned by provider compatibility checks."""
+    """Structured evidence from a basic model connection check."""
 
     success: bool
     message: str = ""
     http_status: int | None = None
     error_kind: str | None = None
-    supports_tool_calling: bool | None = None
 
     def __iter__(self):
         """Keep compatibility with providers/tests that unpack two values."""
@@ -384,18 +390,6 @@ class Provider(ProviderInfo, ABC):  # pylint: disable=too-many-public-methods
         timeout: float = 5,  # pylint: disable=unused-argument
     ) -> tuple[bool, str]:
         """Check if a specific model is reachable/usable."""
-
-    async def check_model_compatibility(
-        self,
-        model_id: str,
-        timeout: float = 5,
-    ) -> ModelConnectionResult:
-        """Return structured evidence without assuming tool support."""
-        result = await self.check_model_connection(model_id, timeout)
-        if isinstance(result, ModelConnectionResult):
-            return result
-        success, message = result
-        return ModelConnectionResult(success=success, message=message)
 
     @staticmethod
     def _sanitize_connection_message(message: str) -> str:

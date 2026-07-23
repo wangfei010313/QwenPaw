@@ -850,18 +850,17 @@ async def test_plugin_discovery_and_check_update_fresh_provider_instance(
         _ = timeout
         return [ModelInfo(id="plugin-model", name="Plugin Model")]
 
-    async def check_model_compatibility(_self, model_id, timeout=5):
+    async def check_model_connection(_self, model_id, timeout=5):
         _ = model_id, timeout
         return provider_manager_module.ModelConnectionResult(
             success=True,
-            supports_tool_calling=True,
         )
 
     monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
     monkeypatch.setattr(
         OpenAIProvider,
-        "check_model_compatibility",
-        check_model_compatibility,
+        "check_model_connection",
+        check_model_connection,
     )
 
     discovery = await manager.discover_provider_models(plugin_id)
@@ -874,7 +873,48 @@ async def test_plugin_discovery_and_check_update_fresh_provider_instance(
     model = refreshed.get_discovered_model_info("plugin-model")
     assert model is not None
     assert model.availability_status == "available"
-    assert model.supports_tool_calling is True
+
+
+async def test_model_check_uses_structured_http_status(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    provider.discovered_models = [
+        ModelInfo(
+            id="missing-candidate",
+            name="Missing Candidate",
+            source="discovered",
+        ),
+    ]
+
+    async def check_model_connection(_self, model_id, timeout=5):
+        _ = model_id, timeout
+        return provider_manager_module.ModelConnectionResult(
+            success=False,
+            message="request rejected",
+            http_status=404,
+        )
+
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "check_model_connection",
+        check_model_connection,
+    )
+
+    result = await manager.check_provider_model(
+        "openai",
+        "missing-candidate",
+    )
+
+    assert result.status == "model_not_found"
+    assert result.http_status == 404
+    assert result.retryable is False
+    candidate = provider.get_discovered_model_info("missing-candidate")
+    assert candidate is not None
+    assert candidate.availability_status == "model_not_found"
 
 
 async def test_discovery_error_redacts_credentials_before_persisting(
@@ -981,15 +1021,31 @@ def test_model_check_classification() -> None:
     assert temporary.status == "transient_error"
     assert temporary.retryable is True
 
-    no_tools = manager._classify_model_check(
+    chat_incompatible = manager._classify_model_check(
+        False,
+        "status=400: Chat completions is not supported",
+    )
+    assert chat_incompatible.status == "incompatible_api"
+    assert chat_incompatible.retryable is False
+
+    structured_missing = manager._classify_model_check(
+        False,
+        "request rejected",
+        http_status=404,
+    )
+    assert structured_missing.status == "model_not_found"
+    assert structured_missing.http_status == 404
+    assert structured_missing.retryable is False
+
+    unsupported_tools = manager._classify_model_check(
         False,
         "status=400: The tool call is not supported",
     )
-    assert no_tools.status == "incompatible_api"
-    assert no_tools.retryable is False
+    assert unsupported_tools.status == "transient_error"
+    assert unsupported_tools.retryable is True
 
 
-def test_legacy_available_model_requires_new_tool_check() -> None:
+def test_legacy_available_model_remains_available() -> None:
     model = ModelInfo.model_validate(
         {
             "id": "legacy-model",
@@ -997,8 +1053,43 @@ def test_legacy_available_model_requires_new_tool_check() -> None:
             "availability_status": "available",
         },
     )
+    assert model.availability_status == "available"
+
+
+def test_legacy_tool_probe_failure_becomes_unverified() -> None:
+    model = ModelInfo.model_validate(
+        {
+            "id": "legacy-tool-probe-model",
+            "name": "Legacy Tool Probe Model",
+            "availability_status": "incompatible_api",
+            "availability_message": "Tool probe returned no valid tool call",
+            "availability_http_status": 400,
+            "availability_retryable": False,
+            "availability_checked_at": "2026-01-01T00:00:00+00:00",
+            "supports_tool_calling": False,
+        },
+    )
+
     assert model.availability_status == "unverified"
-    assert model.supports_tool_calling is None
+    assert model.availability_message is None
+    assert model.availability_http_status is None
+    assert model.availability_retryable is True
+    assert model.availability_checked_at is None
+
+
+def test_legacy_chat_incompatibility_remains_blocking() -> None:
+    model = ModelInfo.model_validate(
+        {
+            "id": "legacy-non-chat-model",
+            "name": "Legacy Non-Chat Model",
+            "availability_status": "incompatible_api",
+            "availability_message": "Chat completions is not supported",
+            "availability_retryable": False,
+        },
+    )
+
+    assert model.availability_status == "incompatible_api"
+    assert model.availability_retryable is False
 
 
 async def test_kimi_discovery_merges_api_and_catalog(
@@ -1063,7 +1154,7 @@ async def test_rejects_activation_of_incompatible_model(
             name="Chat Only Model",
             source="user",
             availability_status="incompatible_api",
-            availability_message="The tool call is not supported",
+            availability_message="Chat completions is not supported",
             availability_retryable=False,
         ),
     ]

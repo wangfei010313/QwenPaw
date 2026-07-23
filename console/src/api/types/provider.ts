@@ -23,7 +23,6 @@ export interface ModelInfo {
   availability_http_status?: number | null;
   availability_retryable?: boolean;
   availability_checked_at?: string | null;
-  supports_tool_calling?: boolean | null;
   config_overrides?: string[];
   max_tokens: number;
   max_input_length: number;

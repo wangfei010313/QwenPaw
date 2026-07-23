@@ -219,15 +219,11 @@ def _validate_model_slot(
             ),
         )
     model_info = provider.get_model_info(model_id)
-    if model_info and (
-        model_info.supports_tool_calling is False
-        or model_info.availability_status
-        in {
-            "permission_denied",
-            "model_not_found",
-            "incompatible_api",
-        }
-    ):
+    if model_info and model_info.availability_status in {
+        "permission_denied",
+        "model_not_found",
+        "incompatible_api",
+    }:
         reason = (
             model_info.availability_message or model_info.availability_status
         )

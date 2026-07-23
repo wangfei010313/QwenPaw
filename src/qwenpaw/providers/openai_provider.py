@@ -167,40 +167,12 @@ class OpenAIProvider(Provider):
         except Exception:
             return []
 
-    # pylint: disable=useless-return
-    def _tool_probe_retry_overrides(
-        self,
-        exc: APIError,
-    ) -> dict[str, Any] | None:
-        """Return provider-specific retry options for a tool probe.
-
-        Subclasses may override this to provide provider-specific retry
-        options when a tool probe fails with a specific API error.
-        """
-        message = str(exc).lower()
-        # Some OpenAI-compatible services only accept the string variants
-        # of tool_choice. Keep the tools request and validate the returned
-        # call, so this does not turn a plain-chat response into a pass.
-        accepts_auto_only = (
-            '["none", "auto"]' in message
-            or "['none', 'auto']" in message
-            or (
-                "must be one of" in message
-                and "none" in message
-                and "auto" in message
-            )
-        )
-        if "tool_choice" in message and accepts_auto_only:
-            return {"tool_choice": "auto"}
-        return None
-
-    # pylint: disable=too-many-return-statements,too-many-branches
     async def check_model_connection(
         self,
         model_id: str,
         timeout: float = 5,
     ) -> ModelConnectionResult:
-        """Check that a model supports chat and QwenPaw tool requests."""
+        """Check that a model can complete a basic chat request."""
         model_id = (model_id or "").strip()
         if not model_id:
             return ModelConnectionResult(
@@ -233,6 +205,7 @@ class OpenAIProvider(Provider):
             # consume the stream to ensure the model is actually responsive
             async for _ in res:
                 break
+            return ModelConnectionResult(success=True)
         except APIError as exc:
             detail = self.connection_error_message(exc)
             status = getattr(exc, "status_code", "unknown")
@@ -250,141 +223,6 @@ class OpenAIProvider(Provider):
                 message=(
                     f"Unknown exception when connecting to model "
                     f"'{model_id}': {self.connection_error_message(exc)}"
-                ),
-            )
-
-        probe_tool = {
-            "type": "function",
-            "function": {
-                "name": "qwenpaw_connection_probe",
-                "description": "A no-op tool used to verify tool support.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "value": {
-                            "type": "string",
-                            "description": "Optional no-op probe value.",
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        }
-        tool_probe_kwargs = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "Call qwenpaw_connection_probe "
-                                "with value pong."
-                            ),
-                        },
-                    ],
-                },
-            ],
-            "tools": [probe_tool],
-            "tool_choice": {
-                "type": "function",
-                "function": {"name": "qwenpaw_connection_probe"},
-            },
-            **common_kwargs,
-        }
-        retry_overrides: dict[str, Any] = {}
-        retry_attempts = 0
-        try:
-            while True:
-                try:
-                    request_kwargs = dict(tool_probe_kwargs)
-                    if retry_overrides:
-                        request_kwargs.update(retry_overrides)
-                    res = await client.chat.completions.create(
-                        **request_kwargs,
-                    )
-                    tool_name = None
-                    arguments = ""
-                    # Some compatible APIs acknowledge the streaming request
-                    # before reporting parameter validation errors. Consume
-                    # the stream inside the retry boundary so those errors
-                    # receive the same provider-specific compatibility retry.
-                    async for chunk in res:
-                        for choice in getattr(chunk, "choices", None) or []:
-                            for call in (
-                                getattr(
-                                    getattr(choice, "delta", None),
-                                    "tool_calls",
-                                    None,
-                                )
-                                or []
-                            ):
-                                function = getattr(call, "function", None)
-                                if function is not None:
-                                    tool_name = (
-                                        getattr(function, "name", None)
-                                        or tool_name
-                                    )
-                                    arguments += (
-                                        getattr(function, "arguments", "")
-                                        or ""
-                                    )
-                    break
-                except APIError as exc:
-                    # At most two distinct, documented compatibility
-                    # adjustments may be needed (for example, disabling
-                    # thinking and switching tool_choice to "auto").
-                    probe_retry = self._tool_probe_retry_overrides(exc)
-                    if probe_retry and retry_attempts < 2:
-                        updated_overrides = {
-                            **retry_overrides,
-                            **probe_retry,
-                        }
-                        if updated_overrides != retry_overrides:
-                            retry_overrides = updated_overrides
-                            retry_attempts += 1
-                            continue
-                    raise
-            if tool_name != "qwenpaw_connection_probe":
-                return ModelConnectionResult(
-                    success=False,
-                    message="Tool probe returned no valid tool call",
-                    error_kind="incompatible_api",
-                    supports_tool_calling=False,
-                )
-            try:
-                valid_arguments = json.loads(arguments).get("value") == "pong"
-            except (TypeError, ValueError):
-                valid_arguments = False
-            if not valid_arguments:
-                return ModelConnectionResult(
-                    success=False,
-                    message="Tool probe returned invalid arguments",
-                    error_kind="incompatible_api",
-                    supports_tool_calling=False,
-                )
-            return ModelConnectionResult(
-                success=True,
-                supports_tool_calling=True,
-            )
-        except APIError as exc:
-            detail = self.connection_error_message(exc)
-            status = getattr(exc, "status_code", "unknown")
-            return ModelConnectionResult(
-                success=False,
-                message=(
-                    f"Tool calling check failed for model '{model_id}' "
-                    f"(status={status}): {detail}"
-                ),
-                http_status=status if isinstance(status, int) else None,
-                error_kind="incompatible_api" if status == 400 else None,
-            )
-        except Exception as exc:
-            return ModelConnectionResult(
-                success=False,
-                message=(
-                    f"Tool calling check failed for model '{model_id}': "
-                    f"{self.connection_error_message(exc)}"
                 ),
             )
 
