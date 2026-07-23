@@ -303,6 +303,32 @@ class OpenAIProvider(Provider):
                     res = await client.chat.completions.create(
                         **request_kwargs,
                     )
+                    tool_name = None
+                    arguments = ""
+                    # Some compatible APIs acknowledge the streaming request
+                    # before reporting parameter validation errors. Consume
+                    # the stream inside the retry boundary so those errors
+                    # receive the same provider-specific compatibility retry.
+                    async for chunk in res:
+                        for choice in getattr(chunk, "choices", None) or []:
+                            for call in (
+                                getattr(
+                                    getattr(choice, "delta", None),
+                                    "tool_calls",
+                                    None,
+                                )
+                                or []
+                            ):
+                                function = getattr(call, "function", None)
+                                if function is not None:
+                                    tool_name = (
+                                        getattr(function, "name", None)
+                                        or tool_name
+                                    )
+                                    arguments += (
+                                        getattr(function, "arguments", "")
+                                        or ""
+                                    )
                     break
                 except APIError as exc:
                     # At most two distinct, documented compatibility
@@ -319,26 +345,6 @@ class OpenAIProvider(Provider):
                             retry_attempts += 1
                             continue
                     raise
-            tool_name = None
-            arguments = ""
-            async for chunk in res:
-                for choice in getattr(chunk, "choices", None) or []:
-                    for call in (
-                        getattr(
-                            getattr(choice, "delta", None),
-                            "tool_calls",
-                            None,
-                        )
-                        or []
-                    ):
-                        function = getattr(call, "function", None)
-                        if function is not None:
-                            tool_name = (
-                                getattr(function, "name", None) or tool_name
-                            )
-                            arguments += (
-                                getattr(function, "arguments", "") or ""
-                            )
             if tool_name != "qwenpaw_connection_probe":
                 return ModelConnectionResult(
                     success=False,
