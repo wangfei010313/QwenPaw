@@ -189,7 +189,7 @@ class AnthropicProvider(Provider):
     async def _check_connection_via_messages(
         self,
         client: anthropic.AsyncAnthropic,
-    ) -> ModelConnectionResult:
+    ) -> tuple[bool, str]:
         """Fallback: check reachability via messages.create."""
         model = self.models[0].id if self.models else "claude-opus-4-5"
         try:
@@ -222,7 +222,7 @@ class AnthropicProvider(Provider):
         self,
         model_id: str,
         timeout: float = 5,
-    ) -> tuple[bool, str]:
+    ) -> ModelConnectionResult:
         """Check if a specific model is reachable/usable."""
         target = (model_id or "").strip()
         if not target:

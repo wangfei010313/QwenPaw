@@ -587,6 +587,174 @@ async def test_failed_discovery_preserves_last_cache_and_user_models(
     assert "user-only" not in {model.id for model in result.models}
 
 
+async def test_discovery_empty_result_surfaces_connection_error(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+
+    async def fetch_models(_self, timeout=5):
+        return []
+
+    async def check_connection(_self, timeout=5):
+        return False, "API error (status=401): invalid api key"
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "check_connection",
+        check_connection,
+    )
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is False
+    assert result.used_static_fallback is True
+    assert "401" in result.error
+    assert provider.models_last_sync_error == result.error
+
+
+async def test_discovery_empty_catalog_uses_generic_message(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+
+    async def fetch_models(_self, timeout=5):
+        return []
+
+    async def check_connection(_self, timeout=5):
+        return True, ""
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "check_connection",
+        check_connection,
+    )
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is False
+    assert result.error == "Provider returned no models"
+
+
+async def test_discovery_merges_catalog_when_flag_enabled(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("deepseek")
+    assert provider is not None
+    assert provider.merge_with_catalog is True
+    catalog_ids = {model.id for model in provider.models}
+    assert catalog_ids
+
+    async def fetch_models(_self, timeout=5):
+        return [ModelInfo(id="brand-new-remote", name="Brand New")]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("deepseek")
+
+    assert result.success is True
+    discovered_ids = {model.id for model in provider.discovered_models}
+    assert "brand-new-remote" in discovered_ids
+    assert catalog_ids <= discovered_ids
+    origins = {
+        model.id: model.discovery_origin
+        for model in provider.discovered_models
+    }
+    assert all(
+        origins[model_id] in {"catalog", "both"}
+        for model_id in catalog_ids
+    )
+
+
+async def test_discovery_skips_catalog_when_flag_disabled(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    assert provider.merge_with_catalog is False
+
+    async def fetch_models(_self, timeout=5):
+        return [ModelInfo(id="remote-only", name="Remote Only")]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("openai")
+
+    assert result.success is True
+    assert [m.id for m in provider.discovered_models] == ["remote-only"]
+    assert provider.discovered_models[0].discovery_origin == "api"
+
+
+def test_replace_with_retry_recovers_from_transient_lock(
+    monkeypatch,
+) -> None:
+    calls = {"count": 0}
+
+    def flaky_replace(src, dst):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise PermissionError("locked")
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        provider_manager_module.os,
+        "replace",
+        flaky_replace,
+    )
+    monkeypatch.setattr(
+        provider_manager_module.time,
+        "sleep",
+        lambda delay: sleeps.append(delay),
+    )
+
+    ProviderManager._replace_with_retry(
+        "src",
+        "dst",
+        attempts=5,
+        delay=0.01,
+    )
+
+    assert calls["count"] == 3
+    assert sleeps == [0.01, 0.01]
+
+
+def test_replace_with_retry_reraises_when_always_locked(
+    monkeypatch,
+) -> None:
+    def always_locked(src, dst):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(
+        provider_manager_module.os,
+        "replace",
+        always_locked,
+    )
+    monkeypatch.setattr(
+        provider_manager_module.time,
+        "sleep",
+        lambda delay: None,
+    )
+
+    with pytest.raises(PermissionError):
+        ProviderManager._replace_with_retry(
+            "src",
+            "dst",
+            attempts=3,
+            delay=0,
+        )
+
+
 async def test_discovery_deduplicates_and_preserves_builtin_metadata(
     isolated_secret_dir,
     monkeypatch,

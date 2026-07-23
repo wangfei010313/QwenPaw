@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Literal
 
@@ -1164,6 +1165,7 @@ PROVIDER_KIMI_CN = OpenAIProvider(
     api_key_prefix="",
     models=KIMI_MODELS,
     support_model_discovery=True,
+    merge_with_catalog=True,
     freeze_url=True,
     provider_group="kimi",
     provider_group_name="Kimi",
@@ -1177,6 +1179,7 @@ PROVIDER_KIMI_INTL = OpenAIProvider(
     api_key_prefix="",
     models=KIMI_MODELS,
     support_model_discovery=True,
+    merge_with_catalog=True,
     freeze_url=True,
     provider_group="kimi",
     provider_group_name="Kimi",
@@ -1213,6 +1216,7 @@ PROVIDER_DEEPSEEK = OpenAIProvider(
     api_key_prefix="sk-",
     models=DEEPSEEK_MODELS,
     support_model_discovery=True,
+    merge_with_catalog=True,
     freeze_url=True,
 )
 
@@ -1681,6 +1685,28 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 ):
                     setattr(configured, field, getattr(remote, field))
 
+    @staticmethod
+    async def _probe_discovery_failure_reason(
+        provider: Provider,
+        timeout: float,
+    ) -> str | None:
+        """Return the real reason an empty discovery result may hide.
+
+        ``fetch_models`` swallows transport errors and returns an empty
+        list, so an empty result is ambiguous. When the provider exposes a
+        connection check, use it to tell an authentic empty catalog apart
+        from a failed request such as an invalid API key. The probe never
+        raises, so it cannot mask the original empty result.
+        """
+        check = getattr(provider, "check_connection", None)
+        if check is None:
+            return None
+        try:
+            ok, detail = await check(timeout=timeout)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+        return None if ok else (detail or None)
+
     async def discover_provider_models(
         self,
         provider_id: str,
@@ -1719,7 +1745,11 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             fetched = await provider.fetch_models(timeout=timeout)
             fetched = [model for model in fetched if model.id.strip()]
             if not fetched:
-                raise ValueError("Provider returned no models")
+                reason = await self._probe_discovery_failure_reason(
+                    provider,
+                    timeout,
+                )
+                raise ValueError(reason or "Provider returned no models")
 
             synced_at = datetime.now(timezone.utc).isoformat()
             by_id: dict[str, ModelInfo] = {}
@@ -1736,7 +1766,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
             # Keep the maintained built-in catalog visible when a provider's
             # /models endpoint exposes only a subset of its public models.
-            if provider_id in {"kimi-cn", "kimi-intl", "deepseek"}:
+            if provider.merge_with_catalog:
                 for catalog_model in provider.models:
                     existing = by_id.get(catalog_model.id)
                     if existing is not None:
@@ -2383,6 +2413,30 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 snapshot,
             )
 
+    @staticmethod
+    def _replace_with_retry(
+        src: str,
+        dst: str,
+        *,
+        attempts: int = 5,
+        delay: float = 0.1,
+    ) -> None:
+        """Atomically replace ``dst`` with ``src``, retrying on lock.
+
+        ``os.replace`` is atomic but can raise ``PermissionError`` on
+        Windows when the destination is briefly held open by antivirus,
+        an indexer, or a concurrent reader. Retry a few times before
+        giving up so transient locks do not corrupt persisted state.
+        """
+        for attempt in range(attempts):
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(delay)
+
     def _save_provider_snapshot(
         self,
         provider_id: str,
@@ -2415,7 +2469,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 json.dump(data, handle, ensure_ascii=False, indent=2)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp_name, provider_path)
+            self._replace_with_retry(temp_name, provider_path)
             try:
                 os.chmod(provider_path, 0o600)
             except OSError:

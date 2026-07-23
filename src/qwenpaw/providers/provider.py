@@ -284,6 +284,13 @@ class ProviderInfo(BaseModel):
             " from the provider's API"
         ),
     )
+    merge_with_catalog: bool = Field(
+        default=False,
+        description=(
+            "Whether to merge the maintained catalog with API discovery "
+            "results, for providers whose /models returns only a subset"
+        ),
+    )
     support_connection_check: bool = Field(
         default=True,
         description=(
@@ -846,6 +853,7 @@ class Provider(ProviderInfo, ABC):  # pylint: disable=too-many-public-methods
             is_local=self.is_local,
             is_custom=self.is_custom,
             support_model_discovery=self.support_model_discovery,
+            merge_with_catalog=self.merge_with_catalog,
             support_connection_check=self.support_connection_check
             and not self.is_custom,
             freeze_url=self.freeze_url,
