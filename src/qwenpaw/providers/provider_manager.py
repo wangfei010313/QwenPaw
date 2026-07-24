@@ -2469,7 +2469,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
                 json.dump(data, handle, ensure_ascii=False, indent=2)
                 handle.flush()
                 os.fsync(handle.fileno())
-            self._replace_with_retry(temp_name, provider_path)
+            self._replace_with_retry(temp_name, str(provider_path))
             try:
                 os.chmod(provider_path, 0o600)
             except OSError:

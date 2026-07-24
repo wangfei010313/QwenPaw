@@ -670,8 +670,7 @@ async def test_discovery_merges_catalog_when_flag_enabled(
         for model in provider.discovered_models
     }
     assert all(
-        origins[model_id] in {"catalog", "both"}
-        for model_id in catalog_ids
+        origins[model_id] in {"catalog", "both"} for model_id in catalog_ids
     )
 
 
@@ -715,7 +714,7 @@ def test_replace_with_retry_recovers_from_transient_lock(
     monkeypatch.setattr(
         provider_manager_module.time,
         "sleep",
-        lambda delay: sleeps.append(delay),
+        sleeps.append,
     )
 
     ProviderManager._replace_with_retry(
