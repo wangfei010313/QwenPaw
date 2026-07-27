@@ -320,6 +320,8 @@
     "localModelsNotice": "Backup files do not include local model files. For cross-device migration, you will need to re-download the required local models on the target device."
   },
   "workspace": {
+    "openInFileManager": "Abrir no Gerenciador de Arquivos",
+    "openFailed": "Falha ao abrir o workspace no gerenciador de arquivos",
     "title": "Arquivos",
     "workspacePath": "Workspace:",
     "noFiles": "Nao Arquivos",

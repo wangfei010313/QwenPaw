@@ -208,6 +208,8 @@
     "copyFailed": "エージェント設定のコピーに失敗しました"
   },
   "workspace": {
+    "openInFileManager": "ファイルマネージャーで開く",
+    "openFailed": "ファイルマネージャーでワークスペースを開けませんでした",
     "title": "ファイル",
     "workspacePath": "ワークスペース:",
     "noFiles": "ファイルなし",
