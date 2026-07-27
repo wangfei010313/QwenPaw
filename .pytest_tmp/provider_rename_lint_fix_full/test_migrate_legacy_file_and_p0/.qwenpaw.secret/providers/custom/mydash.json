@@ -1,0 +1,62 @@
+{
+  "id": "mydash",
+  "name": "MyDash",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "api_key": "ENC:gAAAAABqYwoRtc_s-224YIdLtGrHy9sxcKxRWsWhwm7zNTixF432Pbs1aUq3bjSe-xqh9aCJHHVVg71utIaJlu_mvIqsoHxrRvuzIs8KjjDbsZ3hjF-q6Wg=",
+  "chat_model": "OpenAIChatModel",
+  "models": [],
+  "extra_models": [
+    {
+      "id": "qwen3-max",
+      "name": "qwen3-max",
+      "supports_multimodal": null,
+      "supports_image": null,
+      "supports_video": null,
+      "probe_source": null,
+      "is_free": false,
+      "max_tokens": 8192,
+      "max_input_length": 131072,
+      "max_input_length_configured": false,
+      "generate_kwargs": {},
+      "relay_reasoning": true,
+      "thinking_enabled": null,
+      "thinking_budget": null,
+      "reasoning_effort": null,
+      "thinking_param_style": null,
+      "reasoning_effort_options": null,
+      "thinking_budget_range": null
+    }
+  ],
+  "api_key_prefix": "",
+  "api_key_prefixes": [],
+  "is_local": false,
+  "freeze_url": false,
+  "require_api_key": true,
+  "is_custom": true,
+  "support_model_discovery": false,
+  "support_connection_check": true,
+  "generate_kwargs": {},
+  "custom_headers": {},
+  "auth_mode": "api_key",
+  "supports_oauth": false,
+  "oauth_connected": false,
+  "is_free_tier": false,
+  "provider_group": "",
+  "provider_group_name": "",
+  "provider_variant": "",
+  "thinking_param_style": null,
+  "reasoning_effort_options": [
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+  ],
+  "thinking_budget_range": [
+    1,
+    81920
+  ],
+  "meta": {},
+  "max_inline_media_bytes": 2097152
+}

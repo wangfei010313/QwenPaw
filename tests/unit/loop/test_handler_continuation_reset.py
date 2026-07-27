@@ -30,7 +30,7 @@ class _AlwaysContinueGate(StopGate):
 
     async def check(
         self,
-        ctx: Any,
+        _ctx: Any,
     ) -> Optional[StopHandlerResult]:
         return StopHandlerResult(
             action=StopAction.INTERRUPT_AND_CONTINUE,
@@ -55,7 +55,7 @@ class _ResettableGate(StopGate):
 
     async def check(
         self,
-        ctx: Any,
+        _ctx: Any,
     ) -> Optional[StopHandlerResult]:
         return None
 
@@ -93,7 +93,7 @@ async def test_reset_peers_true_skips_trigger():
         def priority(self):
             return 1
 
-        async def check(self, ctx):
+        async def check(self, _ctx):
             return StopHandlerResult(
                 action=StopAction.INTERRUPT_AND_CONTINUE,
                 reason="test",
@@ -153,7 +153,7 @@ async def test_gate_without_reset_method_skipped():
         def name(self):
             return "no-reset"
 
-        async def check(self, ctx):
+        async def check(self, _ctx):
             return None
 
     handler.register(trigger)

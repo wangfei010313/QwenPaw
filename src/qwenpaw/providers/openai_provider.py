@@ -8,9 +8,10 @@ import json
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any, ClassVar, List
 
 from agentscope.model import ChatModelBase
+import httpx
 from openai import APIError
 from pydantic import Field
 
@@ -626,7 +627,7 @@ class OpenAIProvider(Provider):
 class _FreeSuffixProviderMixin:
     """Mixin for providers that mark models as free by suffix."""
 
-    _FREE_SUFFIX = "-free"
+    _FREE_SUFFIX: ClassVar[str] = "-free"
 
     async def fetch_models(
         self,
@@ -669,13 +670,13 @@ class _FreeSuffixProviderMixin:
 class OpenCodeProvider(_FreeSuffixProviderMixin, OpenAIProvider):
     """OpenCode provider with dynamic free model detection."""
 
-    _FREE_SUFFIX = "-free"
+    _FREE_SUFFIX: ClassVar[str] = "-free"
 
 
 class KiloProvider(_FreeSuffixProviderMixin, OpenAIProvider):
     """Kilo Code provider with dynamic free model detection."""
 
-    _FREE_SUFFIX = ":free"
+    _FREE_SUFFIX: ClassVar[str] = ":free"
 
 
 class GitHubModelsProvider(OpenAIProvider):
@@ -688,6 +689,64 @@ class GitHubModelsProvider(OpenAIProvider):
     ``client.models.list()``) receives a 404 response.  This override checks
     connectivity by issuing a minimal chat completion request instead.
     """
+
+    async def fetch_models(self, timeout: float = 5) -> List[ModelInfo]:
+        """Fetch chat-capable models from the public GitHub catalog."""
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(
+                    "https://models.github.ai/catalog/models",
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception:
+            return []
+
+        if not isinstance(payload, list):
+            return []
+
+        models: List[ModelInfo] = []
+        seen: set[str] = set()
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            model_id = str(row.get("id", "")).strip()
+            output_modalities = row.get("supported_output_modalities")
+            if not isinstance(output_modalities, list):
+                output_modalities = []
+            if (
+                not model_id
+                or model_id in seen
+                or "text" not in output_modalities
+            ):
+                continue
+            seen.add(model_id)
+
+            input_modalities = row.get("supported_input_modalities")
+            if not isinstance(input_modalities, list):
+                input_modalities = []
+            limits = row.get("limits")
+            if not isinstance(limits, dict):
+                limits = {}
+            model_data: dict[str, Any] = {
+                "id": model_id,
+                "name": str(row.get("name") or model_id),
+                "supports_multimodal": any(
+                    modality != "text" for modality in input_modalities
+                ),
+                "supports_image": "image" in input_modalities,
+                "supports_video": "video" in input_modalities,
+                "probe_source": "api",
+                "is_free": True,
+            }
+            max_input_tokens = limits.get("max_input_tokens")
+            if isinstance(max_input_tokens, int) and max_input_tokens > 0:
+                model_data["max_input_length_auto_detected"] = max_input_tokens
+            max_output_tokens = limits.get("max_output_tokens")
+            if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+                model_data["max_tokens"] = max_output_tokens
+            models.append(ModelInfo(**model_data))
+        return models
 
     async def check_connection(self, timeout: float = 5) -> tuple[bool, str]:
         """Check connectivity via a tiny chat completion request."""

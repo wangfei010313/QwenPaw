@@ -1,0 +1,41 @@
+{
+  "id": "anthropic",
+  "name": "Anthropic",
+  "base_url": "https://api.anthropic.com/v1",
+  "api_key": "",
+  "chat_model": "AnthropicChatModel",
+  "models": [],
+  "extra_models": [],
+  "api_key_prefix": "sk-ant-",
+  "api_key_prefixes": [],
+  "is_local": false,
+  "freeze_url": false,
+  "require_api_key": true,
+  "is_custom": false,
+  "support_model_discovery": false,
+  "support_connection_check": true,
+  "generate_kwargs": {},
+  "custom_headers": {},
+  "auth_mode": "api_key",
+  "supports_oauth": false,
+  "oauth_connected": false,
+  "is_free_tier": false,
+  "provider_group": "",
+  "provider_group_name": "",
+  "provider_variant": "",
+  "thinking_param_style": null,
+  "reasoning_effort_options": [
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+  ],
+  "thinking_budget_range": [
+    1,
+    81920
+  ],
+  "meta": {},
+  "max_inline_media_bytes": 2097152
+}

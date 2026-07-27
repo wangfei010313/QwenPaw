@@ -968,6 +968,7 @@ PROVIDER_ALIYUN_CODINGPLAN = OpenAIProvider(
     api_key_prefix="sk-sp",
     models=ALIYUN_CODINGPLAN_MODELS,
     support_connection_check=False,
+    support_model_discovery=True,
     freeze_url=True,
     provider_group="aliyun",
     provider_group_name="Aliyun",
@@ -981,6 +982,7 @@ PROVIDER_ALIYUN_CODINGPLAN_INTL = OpenAIProvider(
     api_key_prefix="sk-sp",
     models=ALIYUN_CODINGPLAN_MODELS,
     support_connection_check=False,
+    support_model_discovery=True,
     freeze_url=True,
     provider_group="aliyun",
     provider_group_name="Aliyun",
@@ -1104,6 +1106,7 @@ PROVIDER_OPENCODE = OpenCodeProvider(
     api_key_prefix="",
     models=OPENCODE_MODELS,
     require_api_key=False,
+    support_model_discovery=True,
     meta={
         "base_url_options": [
             {"label": "OpenCode", "value": "https://opencode.ai/zen/v1"},
@@ -1121,6 +1124,7 @@ PROVIDER_KILO = KiloProvider(
     api_key_prefix="",
     models=KILO_MODELS,
     require_api_key=False,
+    support_model_discovery=True,
     meta={"is_free_tier": True},
     freeze_url=True,
 )
@@ -1295,6 +1299,7 @@ PROVIDER_GITHUB_MODELS = GitHubModelsProvider(
     api_key_prefixes=["ghp_", "github_pat_"],
     models=GITHUB_MODELS_MODELS,
     freeze_url=False,
+    support_model_discovery=True,
     meta={
         "is_free_tier": True,
     },

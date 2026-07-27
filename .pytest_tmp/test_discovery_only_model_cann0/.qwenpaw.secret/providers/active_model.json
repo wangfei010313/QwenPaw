@@ -1,0 +1,4 @@
+{
+  "provider_id": "openai",
+  "model": "candidate-only"
+}
