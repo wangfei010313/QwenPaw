@@ -3494,6 +3494,72 @@ async def test_kimi_discovery_merges_api_and_catalog(
     assert result.discovered_count == 2
 
 
+async def test_token_plan_discovery_merges_api_and_catalog(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    china = manager.get_provider("aliyun-tokenplan")
+    international = manager.get_provider("aliyun-tokenplan-intl")
+    assert china is not None
+    assert international is not None
+
+    async def fetch_models(_self, timeout=5):
+        _ = timeout
+        return [
+            ModelInfo(
+                id="qwen3.8-max-preview",
+                name="Qwen3.8 Max Preview",
+            ),
+            ModelInfo(id="qwen3.7-plus", name="Qwen3.7 Plus"),
+        ]
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+
+    result = await manager.discover_provider_models("aliyun-tokenplan")
+
+    by_id = {model.id: model for model in result.models}
+    assert result.success is True
+    assert by_id["qwen3.8-max-preview"].discovery_origin == "both"
+    assert by_id["qwen3.7-plus"].discovery_origin == "both"
+    assert by_id["qwen3.7-max"].discovery_origin == "catalog"
+    assert result.discovered_count == 2
+    assert any(
+        model.id == "qwen3.8-max-preview" for model in china.discovered_models
+    )
+    assert international.discovered_models == []
+
+
+async def test_token_plan_discovery_uses_catalog_after_auth_failure(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("aliyun-tokenplan")
+    assert provider is not None
+
+    async def fetch_models(_self, timeout=5):
+        _ = timeout
+        return []
+
+    async def check_connection(_self, timeout=5):
+        _ = timeout
+        return False, "API error (status=401): invalid api key"
+
+    monkeypatch.setattr(OpenAIProvider, "fetch_models", fetch_models)
+    monkeypatch.setattr(OpenAIProvider, "check_connection", check_connection)
+
+    result = await manager.discover_provider_models("aliyun-tokenplan")
+
+    assert result.success is False
+    assert result.used_static_fallback is True
+    assert result.error_kind == "authentication"
+    assert {model.id for model in result.models} == {
+        model.id for model in provider.models
+    }
+    assert provider.models_last_sync_error == result.error
+
+
 async def test_rejects_unavailable_discovered_model(
     isolated_secret_dir,
 ) -> None:

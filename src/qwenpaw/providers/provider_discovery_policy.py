@@ -10,6 +10,7 @@ from .provider import Provider
 
 DiscoveryStrategy = Literal[
     "openai_models",
+    "tokenplan_models",
     "anthropic_models",
     "gemini_models",
     "provider_specific",
@@ -39,6 +40,7 @@ _CATALOG_PLAN = ProviderDiscoveryPolicy(
     "catalog_only",
     reason="The service does not expose a stable model-list API.",
 )
+_TOKENPLAN_DYNAMIC = ProviderDiscoveryPolicy("tokenplan_models")
 
 BUILTIN_DISCOVERY_POLICIES: dict[str, ProviderDiscoveryPolicy] = {
     "qwenpaw-local": ProviderDiscoveryPolicy(
@@ -66,8 +68,8 @@ BUILTIN_DISCOVERY_POLICIES: dict[str, ProviderDiscoveryPolicy] = {
     "dashscope": ProviderDiscoveryPolicy("provider_specific"),
     "aliyun-codingplan": _CATALOG_PLAN,
     "aliyun-codingplan-intl": _CATALOG_PLAN,
-    "aliyun-tokenplan": _CATALOG_PLAN,
-    "aliyun-tokenplan-intl": _CATALOG_PLAN,
+    "aliyun-tokenplan": _TOKENPLAN_DYNAMIC,
+    "aliyun-tokenplan-intl": _TOKENPLAN_DYNAMIC,
     "opencode": _OPENAI_FREE,
     "kilo": _OPENAI_FREE,
     "openai": _OPENAI_DYNAMIC,

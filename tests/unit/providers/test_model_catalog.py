@@ -35,7 +35,7 @@ def test_packaged_catalog_snapshot() -> None:
     catalog = model_catalog.load_model_catalog()
 
     assert len(catalog) == 19
-    assert sum(len(models) for models in catalog.values()) == 114
+    assert sum(len(models) for models in catalog.values()) == 116
     assert catalog["DASHSCOPE_MODELS"][0].id == "qwen3.8-max"
     assert catalog["DASHSCOPE_MODELS"][0].supports_image is True
     assert catalog["DASHSCOPE_MODELS"][0].thinking_enabled is True
@@ -99,6 +99,26 @@ def test_packaged_catalog_snapshot() -> None:
         "kimi-k2.5": 262_144,
         "qwen3-coder-plus": 1_000_000,
     }
+    token_plan_qwen38 = {
+        model.id: model
+        for model in catalog["ALIYUN_TOKENPLAN_MODELS"]
+        if model.id in {"qwen3.8-max", "qwen3.8-max-preview"}
+    }
+    assert set(token_plan_qwen38) == {
+        "qwen3.8-max",
+        "qwen3.8-max-preview",
+    }
+    assert all(
+        model.supports_image is True for model in token_plan_qwen38.values()
+    )
+    assert token_plan_qwen38["qwen3.8-max-preview"].supports_video is False
+    assert token_plan_qwen38["qwen3.8-max"].supports_video is True
+    assert all(
+        model.max_input_length == 1_000_000
+        for model in token_plan_qwen38.values()
+    )
+    assert token_plan_qwen38["qwen3.8-max-preview"].max_tokens == 65_536
+    assert token_plan_qwen38["qwen3.8-max"].max_tokens == 131_072
     assert {
         model.id: model.max_input_length
         for model in catalog["OPENAI_MODELS"]

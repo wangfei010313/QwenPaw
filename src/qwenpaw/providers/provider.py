@@ -347,6 +347,7 @@ class ProviderInfo(BaseModel):
     )
     discovery_strategy: Literal[
         "openai_models",
+        "tokenplan_models",
         "anthropic_models",
         "gemini_models",
         "provider_specific",

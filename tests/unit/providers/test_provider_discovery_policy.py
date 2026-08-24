@@ -21,14 +21,20 @@ def test_every_builtin_provider_has_discovery_policy() -> None:
     assert all(provider.discovery_strategy for provider in BUILTIN_PROVIDERS)
 
 
-def test_catalog_only_provider_reports_reason() -> None:
-    provider = next(
-        item for item in BUILTIN_PROVIDERS if item.id == "aliyun-tokenplan"
-    )
+def test_token_plan_provider_uses_dedicated_discovery_policy() -> None:
+    providers = [
+        item
+        for item in BUILTIN_PROVIDERS
+        if item.id in {"aliyun-tokenplan", "aliyun-tokenplan-intl"}
+    ]
 
-    assert provider.discovery_strategy == "catalog_only"
-    assert provider.support_model_discovery is False
-    assert provider.discovery_support_reason
+    assert len(providers) == 2
+    for provider in providers:
+        assert provider.discovery_strategy == "tokenplan_models"
+        assert provider.model_sync_mode == "manual"
+        assert provider.discovery_requires_auth is True
+        assert provider.support_model_discovery is True
+        assert provider.merge_with_catalog is True
 
 
 def test_github_models_uses_catalog_only_policy() -> None:
