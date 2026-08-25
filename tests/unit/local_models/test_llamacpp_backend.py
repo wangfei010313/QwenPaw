@@ -872,7 +872,11 @@ async def test_setup_server_falls_back_on_windows_not_implemented(
     )
     monkeypatch.setattr(downloader, "server_ready", fake_server_ready)
 
-    setup_result = await downloader.setup_server(model_path, "demo-model")
+    setup_result = await downloader.setup_server(
+        model_path,
+        "demo-model",
+        max_context_length=65536,
+    )
     await asyncio.sleep(0)
 
     assert setup_result.port == downloader.get_server_status()["port"]
@@ -895,8 +899,8 @@ async def test_setup_server_falls_back_on_windows_not_implemented(
         "supports_image": False,
         "supports_video": False,
         "probe_source": "probed",
-        "max_input_length": 131072,
-        "max_input_length_configured": False,
+        "max_input_length": 65536,
+        "max_input_length_configured": True,
         "max_input_length_auto_detected": None,
         "max_tokens": 8192,
         "generate_kwargs": {},
@@ -931,6 +935,8 @@ async def test_setup_server_falls_back_on_windows_not_implemented(
                 str(DEFAULT_LOCAL_PROVIDER_DIR / "logs" / "llama-server.log"),
                 "--gpu-layers",
                 "auto",
+                "--ctx-size",
+                "65536",
             ],
             {
                 "stdout": downloader_module.asyncio.subprocess.PIPE,
@@ -938,6 +944,30 @@ async def test_setup_server_falls_back_on_windows_not_implemented(
             },
         ),
     ]
+
+
+@pytest.mark.parametrize("max_context_length", [65536, 131072])
+def test_build_model_info_uses_explicit_context_length(
+    max_context_length: int,
+) -> None:
+    info = LlamaCppBackend._build_model_info(
+        model_name="demo-model",
+        resolved_mmproj_path=None,
+        max_context_length=max_context_length,
+    )
+
+    assert info.max_input_length == max_context_length
+    assert info.max_input_length_configured is True
+
+
+def test_build_model_info_keeps_default_context_length() -> None:
+    info = LlamaCppBackend._build_model_info(
+        model_name="demo-model",
+        resolved_mmproj_path=None,
+    )
+
+    assert info.max_input_length == 131072
+    assert info.max_input_length_configured is False
 
 
 def test_resolve_model_file_returns_single_model_path(
