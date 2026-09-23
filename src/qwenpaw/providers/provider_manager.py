@@ -25,6 +25,7 @@ from ..utils.io_utils import (
     run_sync_io,
 )
 from .model_sync import invalidate_api_metadata
+from .model_metadata import packaged_free_models
 from .provider import (
     ModelInfo,
     Provider,
@@ -85,6 +86,22 @@ PROVIDER_VOLCENGINE_CN_CODINGPLAN = (
 )
 VOLCENGINE_CODINGPLAN_MODELS = _provider_catalog.VOLCENGINE_CODINGPLAN_MODELS
 VOLCENGINE_MODELS = _provider_catalog.VOLCENGINE_MODELS
+
+
+def _packaged_free_cards(provider: Provider) -> List[ModelInfo]:
+    """Reviewed free models the packaged catalog offers for one endpoint.
+
+    A disabled provider keeps them unlisted through
+    ``Provider.automatically_listed``, so a service the app does not
+    offer stays out of the selectors, matching the provider's
+    ``model_available`` verdict.
+    """
+    known = {model.id for model in provider.models}
+    return [
+        card.model_copy(deep=True)
+        for card in packaged_free_models(provider.id, provider.base_url)
+        if card.id not in known
+    ]
 
 
 class ProviderManager(
@@ -184,6 +201,7 @@ class ProviderManager(
                     model.model_copy(deep=True)
                     for model in catalog.get(catalog_key, builtin.models)
                 ]
+            builtin.models.extend(_packaged_free_cards(builtin))
             self._add_builtin(builtin)
 
     def _add_builtin(self, provider: Provider):

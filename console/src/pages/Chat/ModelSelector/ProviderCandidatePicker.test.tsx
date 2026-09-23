@@ -49,7 +49,7 @@ it("fetches candidates for the chosen provider and adds inline", async () => {
   await waitFor(() => expect(saved).toHaveBeenCalled());
   expect(providerApi.getModelPool).toHaveBeenCalledWith(
     "openrouter",
-    expect.objectContaining({ tab: "candidates", billing: "free", limit: 10 }),
+    expect.objectContaining({ tab: "all", billing: "free", limit: 10 }),
   );
   expect(
     screen.getByRole("img", { name: "models.billing.free" }),

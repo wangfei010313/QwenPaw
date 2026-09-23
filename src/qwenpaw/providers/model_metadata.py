@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
-from .model_catalog import catalog_documents, matching_catalog_keys
+from .model_catalog import (
+    catalog_documents,
+    matching_catalog_keys,
+    packaged_free_model_ids,
+)
 from .model_info import ModelInfo
 
 
@@ -117,3 +122,24 @@ def provider_catalog_models(
             for model in entry.models:
                 models[model.id] = model
     return list(models.values())
+
+
+@lru_cache(maxsize=64)
+def packaged_free_models(
+    provider_id: str,
+    base_url: str,
+) -> tuple[ModelInfo, ...]:
+    """Resolve the free cards the packaged catalog curates for one endpoint.
+
+    The packaged catalog is immutable for the lifetime of the process, so
+    the resolved cards are cached as reviewed data rather than re-derived
+    per request.  Callers copy a card before mutating it.
+    """
+    free_ids = packaged_free_model_ids(provider_id, base_url)
+    if not free_ids:
+        return ()
+    return tuple(
+        model
+        for model in provider_catalog_models(provider_id, base_url)
+        if model.id in free_ids
+    )

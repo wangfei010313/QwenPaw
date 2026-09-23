@@ -34,7 +34,9 @@ export default function ProviderCandidatePicker({
     const timer = setTimeout(() => {
       providerApi
         .getModelPool(providerId, {
-          tab: "candidates",
+          // A tier view browses every free model, including the ones the
+          // selector already lists, so it never dead-ends on an empty list.
+          tab: tier ? "all" : "candidates",
           ...(tier ? { billing: tier } : {}),
           search,
           offset,

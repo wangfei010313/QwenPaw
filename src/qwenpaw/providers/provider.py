@@ -20,7 +20,6 @@ from ..utils.io_utils import run_sync_io
 from .context_windows import DEFAULT_CONTEXT_WINDOW
 from .thinking import ThinkingControl, ThinkingPreference, resolve_thinking
 from .model_catalog import (
-    packaged_free_model_ids,
     catalog_documents,
     matching_catalog_keys,
 )
@@ -35,7 +34,7 @@ from .model_info import ExtendedModelInfo  # pylint: disable=unused-import
 from .model_info import ModelInfo
 from .model_resolution import resolve_model_info
 from .model_ranking import Recommendation, recommend
-from .model_metadata import provider_catalog_models
+from .model_metadata import packaged_free_models, provider_catalog_models
 from .adapters.cache_policy import cache_request
 from .adapters.request_context import session_header
 from .adapters.wire_protocol import protocol_url
@@ -1334,12 +1333,19 @@ class Provider(ProviderInfo, ABC):  # pylint: disable=too-many-public-methods
         )
 
     def automatically_listed(self, model: ModelInfo) -> bool:
-        """Only explicit choices enter remote model selectors."""
+        """Only reviewed free models and explicit choices enter selectors."""
         return (
             self.is_local
             or self.is_custom
             or self.id == f"hub-managed"
             or getattr(model, f"source", None) == f"user"
+            or (self.enabled and model.id in self.catalog_free_model_ids())
+        )
+
+    def catalog_free_model_ids(self) -> frozenset[str]:
+        """Ids the packaged catalog curates as free for this endpoint."""
+        return frozenset(
+            card.id for card in packaged_free_models(self.id, self.base_url)
         )
 
     def get_context_size(self, model_id: str) -> int:
@@ -1453,7 +1459,7 @@ class Provider(ProviderInfo, ABC):  # pylint: disable=too-many-public-methods
         selected_cards = [
             serialize_model(model) for model in self.configured_models()
         ]
-        free_ids = packaged_free_model_ids(self.id, self.base_url)
+        free_ids = set(self.catalog_free_model_ids())
         free_ids.difference_update(removed)
         for raw in self.models + self.extra_models + self.discovered_models:
             model = ModelInfo.model_validate(raw.model_dump())

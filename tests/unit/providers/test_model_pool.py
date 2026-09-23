@@ -9,6 +9,7 @@ import pytest
 
 from qwenpaw.config.config import ModelSlotConfig
 from qwenpaw.providers.anthropic_provider import AnthropicProvider
+from qwenpaw.providers.openai_provider import OpenAIProvider
 from qwenpaw.providers.model_info import ModelInfo
 from qwenpaw.providers.provider import Provider
 from qwenpaw.providers.model_pool import ModelPoolQuery, model_pool_page
@@ -96,14 +97,19 @@ async def test_new_free_discovery_never_selects_itself(
     )
     assert (await manager.discover_provider_models(f"openrouter")).success
     info = await manager.get_provider(f"openrouter").get_info()
-    assert not info.models and not info.extra_models
+    listed = {model.id for model in info.models}
+    # The packaged free card is reviewed data; a discovery result is not.
+    assert "openrouter/free" in listed
+    assert remote.id not in listed
+    assert not info.extra_models
     assert remote.id in {model.id for model in info.discovered_models}
     assert remote.id not in info.seen_model_ids
     await manager.update_model_pool(f"openrouter", remote.id, seen=True)
     assert (await manager.discover_provider_models(f"openrouter")).success
     info = await ProviderManager().get_provider(f"openrouter").get_info()
     assert remote.id in info.seen_model_ids
-    assert not info.models and not info.extra_models
+    assert remote.id not in {model.id for model in info.models}
+    assert not info.extra_models
 
 
 async def test_listing_preserves_explicit_selection(isolated_secret_dir):
@@ -123,6 +129,88 @@ async def test_listing_preserves_explicit_selection(isolated_secret_dir):
     )
     assert f"deepseek-flash" not in {model.id for model in info.models}
     assert f"manual" in {model.id for model in info.extra_models}
+
+
+async def test_packaged_free_models_need_no_manual_selection(
+    isolated_secret_dir,
+):
+    """Curated free models must reach the free tab without a user action."""
+    manager = ProviderManager()
+    provider = manager.get_provider(f"zhipu-cn")
+    info = await provider.get_info(include_candidates=False)
+    assert provider.catalog_free_model_ids() == {f"glm-4.7-flash"}
+    assert {model.id for model in info.models} == {f"glm-4.7-flash"}
+    assert info.models[0].is_free
+    assert info.models[0].billing == f"free"
+    # Activation validates through the listed models.
+    assert provider.has_model(f"glm-4.7-flash")
+
+
+async def test_paid_catalog_models_stay_candidates(isolated_secret_dir):
+    """Only the curated free subset leaves the candidate pool."""
+    manager = ProviderManager()
+    provider = manager.get_provider(f"kilo")
+    info = await provider.get_info()
+    listed = {model.id for model in info.models}
+    assert listed == provider.catalog_free_model_ids()
+    assert f"openrouter/free" in listed
+    assert not listed & {model.id for model in info.extra_models}
+    card = next(
+        model
+        for model in provider.discovery_candidates()
+        if model.id not in listed and model.billing == f"paid"
+    )
+    assert card.id not in listed
+
+
+async def test_removed_free_model_stays_unlisted(isolated_secret_dir):
+    manager = ProviderManager()
+    provider = manager.get_provider(f"zhipu-cn")
+    await provider.delete_model(f"glm-4.7-flash")
+    info = await provider.get_info()
+    assert f"glm-4.7-flash" not in {model.id for model in info.models}
+    assert not info.is_free_tier
+
+
+async def test_pool_reports_free_models_as_selected(isolated_secret_dir):
+    manager = ProviderManager()
+    provider = manager.get_provider(f"siliconflow-cn")
+    card_id = f"Qwen/Qwen3-8B"
+    selected = model_pool_page(
+        provider,
+        ModelPoolQuery(tab=f"selected", billing=f"free"),
+    )
+    assert card_id in {model.id for model in selected.models}
+    assert selected.selected_count == len(provider.catalog_free_model_ids())
+    candidates = model_pool_page(
+        provider,
+        ModelPoolQuery(tab=f"candidates", billing=f"free"),
+    )
+    assert card_id not in {model.id for model in candidates.models}
+
+
+async def test_disabled_provider_keeps_free_models_unlisted(
+    isolated_secret_dir,
+):
+    """A provider the app does not offer lists none of its free models."""
+    manager = ProviderManager()
+    provider = manager.get_provider(f"opencode")
+    assert not provider.enabled
+    assert provider.catalog_free_model_ids()
+    assert not (await provider.get_info()).models
+    provider.enabled = True
+    assert {model.id for model in (await provider.get_info()).models} == (
+        provider.catalog_free_model_ids()
+    )
+
+
+def test_custom_endpoint_never_lists_curated_free_models():
+    provider = OpenAIProvider(
+        id=f"custom",
+        name=f"Custom",
+        base_url=f"https://api.siliconflow.cn/v1",
+    )
+    assert not provider.catalog_free_model_ids()
 
 
 @pytest.mark.parametrize(f"operation", [f"config", f"discovery"])

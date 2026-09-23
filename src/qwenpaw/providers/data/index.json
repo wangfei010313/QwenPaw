@@ -6,7 +6,7 @@
   "providers": {
     "openrouter": {
       "path": "providers/openrouter.json",
-      "sha256": "df05d2f7d6c319de48debcbac2695416af427e4bbf6d25c429c13458e1da1223",
+      "sha256": "63c8deaa41abdff46dbcc232d2b973835da1c8bef5e1a394b9981d283de4d8c7",
       "api_urls": [
         "https://openrouter.ai/api/v1"
       ],
@@ -20,7 +20,9 @@
         "default_model_ids": [],
         "models": []
       },
-      "free_model_ids": []
+      "free_model_ids": [
+        "openrouter/free"
+      ]
     },
     "modelscope": {
       "path": "providers/modelscope.json",
