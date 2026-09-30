@@ -11,12 +11,14 @@ as constructor parameters and does not build them internally.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 import uuid
+from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, Optional, TYPE_CHECKING
+from typing import Any, Literal, Optional, TYPE_CHECKING, cast
 
 from agentscope.agent import Agent, InjectionConfig, ReActConfig
 from agentscope.event import (
@@ -49,7 +51,10 @@ from ..constant import (
 )
 from ..loop.gates import StopAction, StopHandlerResult
 from ..providers.error_utils import extract_status_code
-from ..providers.fallback_chat_model import install_fallback_notice_sink
+from ..providers.fallback_chat_model import (
+    collect_response_notices,
+    new_notice_sink,
+)
 from ..providers.model_capability_cache import get_capability_cache
 from ..providers.adapters.request_context import model_session
 from ..utils.tool_call_extra import (
@@ -210,6 +215,12 @@ class QwenPawAgent(CodingModeMixin, Agent):
         # coercion (issue #6839); rebuilt by ``_call_model`` from exactly
         # the tool list the model sees on every call.
         self._tool_schema_index: dict[str, dict[str, Any]] = {}
+
+        # Model-fallback transparency sink for the reply round in flight:
+        # ``_reasoning`` replaces it, ``_call_model`` fills it, and that
+        # round's outgoing events read it.  One slot per agent instance,
+        # like the rest of the agent's request state.
+        self._fallback_notices: dict[str, Any] = new_notice_sink()
 
         init_kwargs: dict[str, Any] = {
             "name": name,
@@ -722,13 +733,58 @@ class QwenPawAgent(CodingModeMixin, Agent):
         so a second overflow propagates instead of entering a recovery loop.
         """
         self._index_tool_schemas(tools)
-        return await call_with_overflow_recovery(
+        response = await call_with_overflow_recovery(
             super()._call_model,
             partial(self._recover_model_overflow, tool_choice=tool_choice),
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
         )
+        return self._observe_fallback_notices(response)
+
+    def _observe_fallback_notices(self, response: Any) -> Any:
+        """Collect fallback notices from the response QwenPaw owns.
+
+        AgentScope converts model output into events without its
+        ``ChatResponse.metadata``, and the runtime heartbeat pulls those
+        events one task at a time, so the reply loop cannot receive the
+        notices through a context variable.  Reading them off the
+        response here, in the frame that runs the model call, keeps the
+        hand-off independent of task boundaries.
+        """
+        if inspect.isasyncgen(response):
+            return self._notice_observing_stream(
+                cast(AsyncGenerator[Any, None], response),
+            )
+        collect_response_notices(
+            self._notice_sink(),
+            getattr(response, "metadata", None),
+        )
+        return response
+
+    def _notice_sink(self) -> dict[str, Any]:
+        """Return this round's notice sink, creating it if needed.
+
+        ``__init__`` seeds it, but bare agent objects (tests, partial
+        construction) may reach a model call without one.
+        """
+        sink = getattr(self, "_fallback_notices", None)
+        if sink is None:
+            sink = new_notice_sink()
+            self._fallback_notices = sink
+        return sink
+
+    async def _notice_observing_stream(
+        self,
+        stream: AsyncGenerator[Any, None],
+    ) -> AsyncGenerator[Any, None]:
+        """Pass model chunks through while collecting their notices."""
+        async for chunk in stream:
+            collect_response_notices(
+                self._notice_sink(),
+                getattr(chunk, "metadata", None),
+            )
+            yield chunk
 
     async def _recover_model_overflow(
         self,
@@ -876,7 +932,11 @@ class QwenPawAgent(CodingModeMixin, Agent):
 
         # agentscope drops ChatResponse.metadata during event conversion;
         # collect model-fallback transparency data out-of-band instead.
-        fallback_sink = install_fallback_notice_sink()
+        # ``_call_model`` is the frame that shares this sink with the model
+        # call -- a context variable would not survive the runtime
+        # heartbeat, which pulls each reply event from a fresh task.
+        fallback_sink = new_notice_sink()
+        self._fallback_notices = fallback_sink
 
         # ── Inject background-tool results before each reasoning step ──
         await self._inject_pending_hints()

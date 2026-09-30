@@ -15,25 +15,51 @@ from .stream_progress import has_meaningful_stream_content
 
 logger = logging.getLogger(__name__)
 
-_FALLBACK_NOTICE_SINK: ContextVar[dict[str, Any] | None] = ContextVar(
-    "qwenpaw_fallback_notice_sink",
-    default=None,
-)
+NOTICE_EVENTS_KEY = "qwenpaw_model_fallbacks"
+NOTICE_ACTUAL_KEY = "qwenpaw_actual_model"
 
 
-def install_fallback_notice_sink() -> dict[str, Any]:
-    """Install a per-request sink for model-fallback transparency data.
+def new_notice_sink() -> dict[str, Any]:
+    """Return an empty sink for one reply's fallback transparency data.
 
-    The pinned agentscope release drops ``ChatResponse.metadata`` when
-    converting model output into agent events, so annotating responses
-    alone never reaches the Console or channel notifiers.  The reply
-    loop installs this sink before iterating events (same task context
-    as the model call); ``FallbackChatModel`` publishes each fallback
-    into it, and the agent re-attaches the data onto outgoing events.
+    The pinned agentscope release drops ``ChatResponse.metadata`` when it
+    converts model output into agent events, so the reply loop collects
+    the notices through a plain object it shares with the model call and
+    re-attaches them onto the events it yields.
+
+    The sink is a mutable object rather than a ``ContextVar`` payload on
+    purpose: the runtime heartbeat pulls the reply stream one event per
+    asyncio task (``runtime/heartbeat.py``), so a context variable set
+    inside the reply generator is not visible to the task that runs the
+    model call.
     """
-    sink: dict[str, Any] = {"events": [], "actual_model": None}
-    _FALLBACK_NOTICE_SINK.set(sink)
-    return sink
+    return {"events": [], "actual_model": None}
+
+
+def collect_response_notices(
+    sink: dict[str, Any],
+    metadata: Any,
+) -> None:
+    """Copy the notices carried by one model response into ``sink``.
+
+    ``FallbackChatModel`` annotates the response it returns and the
+    chunks it streams; this reads those annotations back.  Consecutive
+    duplicates are ignored because a retrying stream may replay a chunk
+    that was already observed.
+    """
+    if not isinstance(metadata, dict):
+        return
+    events = metadata.get(NOTICE_EVENTS_KEY)
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if sink["events"] and sink["events"][-1] == event:
+                continue
+            sink["events"].append(dict(event))
+    actual = metadata.get(NOTICE_ACTUAL_KEY)
+    if isinstance(actual, dict):
+        sink["actual_model"] = dict(actual)
 
 
 class FallbackChatModel(ChatModelBase):
@@ -344,14 +370,9 @@ class FallbackChatModel(ChatModelBase):
         following: ChatModelBase,
         exc: Exception,
     ) -> dict[str, str]:
-        """Log one fallback hop and publish it to the request sink."""
+        """Log one fallback hop and return its transparency record."""
         self._log_fallback(current, following, exc)
-        event = self._fallback_event(current, following, exc)
-        sink = _FALLBACK_NOTICE_SINK.get()
-        if sink is not None:
-            sink["events"].append(dict(event))
-            sink["actual_model"] = self._actual_model_dict(following)
-        return event
+        return self._fallback_event(current, following, exc)
 
     @staticmethod
     def _model_identity(model: ChatModelBase) -> tuple[str, str]:
@@ -404,11 +425,11 @@ class FallbackChatModel(ChatModelBase):
             return response
         metadata = dict(getattr(response, "metadata", None) or {})
         if events:
-            metadata["qwenpaw_model_fallbacks"] = list(events)
+            metadata[NOTICE_EVENTS_KEY] = list(events)
         if active_model is not None:
-            metadata[
-                "qwenpaw_actual_model"
-            ] = FallbackChatModel._actual_model_dict(active_model)
+            metadata[NOTICE_ACTUAL_KEY] = FallbackChatModel._actual_model_dict(
+                active_model,
+            )
         response.metadata = metadata
         return response
 

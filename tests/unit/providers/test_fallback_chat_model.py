@@ -28,7 +28,8 @@ from qwenpaw.providers.capping_formatter import (
 )
 from qwenpaw.providers.fallback_chat_model import (
     FallbackChatModel,
-    install_fallback_notice_sink,
+    collect_response_notices,
+    new_notice_sink,
 )
 from qwenpaw.providers.rate_limiter import _limiters
 from qwenpaw.providers.retry_chat_model import (
@@ -716,19 +717,49 @@ async def test_structured_output_skips_broken_candidate() -> None:
     assert len(events) == 2
 
 
-async def test_fallback_sink_records_events_and_actual_model() -> None:
-    """The reply loop reads fallback data from the request sink."""
-    sink = install_fallback_notice_sink()
+async def test_notices_are_collected_from_a_response() -> None:
+    """The reply loop reads fallback data off the model's response."""
     primary = FakeModel("primary", HttpError(429))
     fallback = FakeModel("fallback", lambda: _response("ok"))
     model = FallbackChatModel([primary, fallback])
 
-    await model()
+    response = await model()
+    sink = new_notice_sink()
+    collect_response_notices(sink, response.metadata)
 
     assert len(sink["events"]) == 1
     assert sink["events"][0]["type"] == "model_fallback"
     assert sink["events"][0]["to_model_id"] == "fallback"
     assert (sink["actual_model"] or {})["model_id"] == "fallback"
+
+
+async def test_notices_are_collected_from_streamed_chunks() -> None:
+    """Streamed fallbacks carry their notice on the chunk that follows."""
+    primary = FakeModel("primary", HttpError(503))
+    fallback = FakeModel("fallback", lambda: _stream(_response("ok")))
+    model = FallbackChatModel([primary, fallback])
+
+    response = await model(messages=[], tools=[])
+    sink = new_notice_sink()
+    async for chunk in cast(AsyncGenerator[ChatResponse, None], response):
+        collect_response_notices(sink, chunk.metadata)
+
+    assert len(sink["events"]) == 1
+    assert sink["events"][0]["to_model_id"] == "fallback"
+    assert (sink["actual_model"] or {})["model_id"] == "fallback"
+
+
+def test_notice_collector_tolerates_missing_and_replayed_data() -> None:
+    """Replayed chunks and responses without notices stay harmless."""
+    sink = new_notice_sink()
+    event = {"type": "model_fallback", "to_model_id": "fallback"}
+
+    collect_response_notices(sink, None)
+    collect_response_notices(sink, {})
+    collect_response_notices(sink, {"qwenpaw_model_fallbacks": [event]})
+    collect_response_notices(sink, {"qwenpaw_model_fallbacks": [event]})
+
+    assert sink["events"] == [event]
 
 
 async def test_active_model_resets_after_streamed_fallback() -> None:
