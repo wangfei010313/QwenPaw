@@ -881,18 +881,26 @@ function useMultimodalCapabilities(
     supportsMultimodal: boolean;
     supportsImage: boolean;
     supportsVideo: boolean;
-  }>({ supportsMultimodal: false, supportsImage: false, supportsVideo: false });
+    visionFallbackEnabled: boolean;
+  }>({
+    supportsMultimodal: false,
+    supportsImage: false,
+    supportsVideo: false,
+    visionFallbackEnabled: false,
+  });
 
   const updateCapsIfChanged = useCallback(
     (next: {
       supportsMultimodal: boolean;
       supportsImage: boolean;
       supportsVideo: boolean;
+      visionFallbackEnabled: boolean;
     }) => {
       setMultimodalCaps((prev) =>
         prev.supportsMultimodal === next.supportsMultimodal &&
         prev.supportsImage === next.supportsImage &&
-        prev.supportsVideo === next.supportsVideo
+        prev.supportsVideo === next.supportsVideo &&
+        prev.visionFallbackEnabled === next.visionFallbackEnabled
           ? prev
           : next,
       );
@@ -907,15 +915,17 @@ function useMultimodalCapabilities(
       supportsMultimodal: false,
       supportsImage: false,
       supportsVideo: false,
+      visionFallbackEnabled: false,
     };
     if (!usesQwenPawBackend) {
       updateCapsIfChanged(noCaps);
       return;
     }
     try {
-      const [providers, activeModels] = await Promise.all([
+      const [providers, activeModels, running] = await Promise.all([
         providerApi.listProviders(),
         loadSessionModel(selectedAgent, { sessionId, chatId }),
+        agentApi.getAgentRunningConfig().catch(() => null),
       ]);
       if (revision !== capsRevision.current) return;
       const activeProviderId = activeModels?.active_llm?.provider_id;
@@ -940,6 +950,11 @@ function useMultimodalCapabilities(
         supportsMultimodal: model?.supports_multimodal ?? false,
         supportsImage: model?.supports_image ?? false,
         supportsVideo: model?.supports_video ?? false,
+        visionFallbackEnabled: !!(
+          running?.multimodal_fallback?.enabled &&
+          running.multimodal_fallback.vision_provider &&
+          running.multimodal_fallback.vision_model
+        ),
       });
     } catch {
       if (revision === capsRevision.current) updateCapsIfChanged(noCaps);
@@ -3478,7 +3493,14 @@ export default function ChatPage() {
       const { file, onSuccess, onError, onProgress } = options;
       try {
         // Warn when model has no multimodal support
-        if (usesQwenPawBackend && !multimodalCaps.supportsMultimodal) {
+        if (
+          usesQwenPawBackend &&
+          file.type.startsWith("image/") &&
+          !multimodalCaps.supportsImage &&
+          multimodalCaps.visionFallbackEnabled
+        ) {
+          message.info(t("visionFallback.uploadNotice"));
+        } else if (usesQwenPawBackend && !multimodalCaps.supportsMultimodal) {
           message.warning(t("chat.attachments.multimodalWarning"));
         } else if (
           multimodalCaps.supportsImage &&

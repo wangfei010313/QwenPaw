@@ -1360,6 +1360,26 @@ class LightContextConfig(BaseModel):
         return self
 
 
+class MultimodalFallbackConfig(BaseModel):
+    """Explicit per-agent image description settings."""
+
+    enabled: bool = False
+    vision_provider: str = f""
+    vision_model: str = f""
+    max_images_per_turn: int = Field(default=5, ge=1, le=50)
+    description_max_tokens: int = Field(default=1024, ge=64, le=4096)
+    timeout_seconds: float = Field(default=60.0, ge=1.0, le=300.0)
+
+    @model_validator(mode=f"after")
+    def validate_vision_selection(self):
+        """Require an explicit destination for automatic image sending."""
+        self.vision_provider = self.vision_provider.strip()
+        self.vision_model = self.vision_model.strip()
+        if self.enabled and not (self.vision_provider and self.vision_model):
+            raise ValueError(f"Vision provider and model are required")
+        return self
+
+
 class AutoTitleConfig(BaseModel):
     """Async chat-title generation configuration.
 
@@ -1950,6 +1970,10 @@ class AgentsRunningConfig(BaseModel):
 
     light_context_config: LightContextConfig = Field(
         default_factory=LightContextConfig,
+    )
+
+    multimodal_fallback: MultimodalFallbackConfig = Field(
+        default_factory=MultimodalFallbackConfig,
     )
 
     auto_title_config: AutoTitleConfig = Field(

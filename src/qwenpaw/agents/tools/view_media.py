@@ -25,6 +25,8 @@ from agentscope.message import (
 from agentscope.tool import ToolChunk
 
 from ...config.context import get_current_workspace_dir
+from ...config.config import load_agent_config
+from ...app.agent_context import get_current_agent_id
 from ...constant import EnvVarLoader, WORKING_DIR
 from ...runtime.tool_registry import tool_descriptor
 from ...utils.io_utils import make_dirs_async, run_sync_io, write_bytes_async
@@ -591,8 +593,8 @@ async def _probe_multimodal_if_needed(
 def _check_multimodal_support(media_type: str = "image") -> bool:
     """Check whether the active model supports the given media type (sync).
 
-    For ``image``: returns True when supports_image or supports_multimodal
-    is explicitly True.
+    For ``image``: the explicit supports_image value takes precedence;
+    the legacy supports_multimodal flag is used only when it is unknown.
     For ``video``: returns True only when supports_video is explicitly True.
 
     Returns False for unknown (None) or explicitly unsupported (False).
@@ -607,11 +609,9 @@ def _check_multimodal_support(media_type: str = "image") -> bool:
             return True
         if media_type == "video":
             return model_info.supports_video is True
-        # image: True if supports_image or the combined supports_multimodal
-        return (
-            model_info.supports_image is True
-            or model_info.supports_multimodal is True
-        )
+        if model_info.supports_image is not None:
+            return model_info.supports_image
+        return model_info.supports_multimodal is True
     except Exception:
         return True
 
@@ -623,6 +623,18 @@ def _get_multimodal_fallback_hint(media_type: str, path: str) -> str:
     frontend/user can see it; the hint tells the agent it cannot perceive
     the media itself.
     """
+    if media_type == f"image":
+        try:
+            config = load_agent_config(get_current_agent_id() or f"default")
+            if config.running.multimodal_fallback.enabled:
+                return (
+                    f"[Image loaded. The configured auxiliary vision model "
+                    f"will provide an image description before reasoning. "
+                    f"Use that description if available; if parsing fails, "
+                    f"report the failure without guessing image contents.]"
+                )
+        except Exception:
+            pass
     try:
         from ..prompt import get_active_model_multimodal_raw
 

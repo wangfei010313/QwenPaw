@@ -179,7 +179,17 @@ export interface LoopConfig {
   custom_modes?: CustomLoopModeConfig[];
 }
 
+export interface MultimodalFallbackConfig {
+  enabled: boolean;
+  vision_provider: string;
+  vision_model: string;
+  max_images_per_turn: number;
+  description_max_tokens: number;
+  timeout_seconds: number;
+}
+
 export interface AgentsRunningConfig {
+  multimodal_fallback?: MultimodalFallbackConfig;
   max_iters: number;
   loop: LoopConfig;
   shell_command_timeout: number;

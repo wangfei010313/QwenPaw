@@ -9,6 +9,7 @@ import { useAgentConfig } from "./useAgentConfig.tsx";
 import {
   ReactAgentCard,
   LlmRetryCard,
+  MultimodalFallbackCard,
   LlmRateLimiterCard,
   ToolExecutionLevelCard,
   AgentLoopCard,
@@ -191,6 +192,15 @@ function AgentConfigPage() {
         children: (
           <div className={styles.tabContent}>
             <LlmRetryCard llmRetryEnabled={llmRetryEnabled} />
+          </div>
+        ),
+      },
+      {
+        key: "multimodalFallback",
+        label: t("visionFallback.title"),
+        children: (
+          <div className={styles.tabContent}>
+            <MultimodalFallbackCard />
           </div>
         ),
       },

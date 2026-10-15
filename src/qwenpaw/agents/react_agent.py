@@ -34,6 +34,13 @@ from .context.base import ContextManager
 from .context.overflow_recovery import call_with_overflow_recovery
 from .skill_system import get_workspace_skills_dir
 from .utils.image_freezing import freeze_local_images_async
+from .model_factory import create_model_and_formatter_async
+from .utils.vision_fallback import (
+    VISION_CACHE_KEY,
+    VisionFallbackChatModel,
+    VisionFallbackContext,
+)
+from ..config.config import ModelSlotConfig
 from .utils.message_request_normalizer import _is_media_block
 from .utils.text_block_utils import (
     drop_empty_text_blocks,
@@ -300,6 +307,8 @@ class QwenPawAgent(CodingModeMixin, Agent):
         point on the base path ensures memory and plugin middlewares observe
         both strategies consistently.
         """
+        await self._prepare_vision_fallback()
+
         # ── Always sanitize tool messages before any model call ──
         # Orphan tool_result messages (whose tool_call was evicted by a
         # prior compression) can survive in context across session
@@ -707,6 +716,53 @@ class QwenPawAgent(CodingModeMixin, Agent):
             and "internalerror.algo.invalidparameter" in error_str
             and invalid_modal
         )
+
+    async def _prepare_vision_fallback(self) -> None:
+        """Prepare descriptions before compaction for all model candidates."""
+        config = getattr(
+            getattr(getattr(self, f"_agent_config", None), f"running", None),
+            f"multimodal_fallback",
+            None,
+        )
+        if config is None or not config.enabled:
+            return
+        turn = getattr(self.state, f"reply_id", None)
+        context = getattr(self, f"_vision_context", None)
+        if context is None or getattr(self, f"_vision_turn", None) != turn:
+            cache = self.state.middle_context.setdefault(VISION_CACHE_KEY, {})
+
+            async def build_model():
+                auxiliary_config = self._agent_config.model_copy(deep=True)
+                auxiliary_config.running.multimodal_fallback.enabled = False
+                auxiliary_config.thinking_level = f"off"
+                auxiliary_config.thinking_budget = None
+                return await create_model_and_formatter_async(
+                    agent_id=self._agent_config.id,
+                    agent_config=auxiliary_config,
+                    model_slot_override=ModelSlotConfig(
+                        provider_id=config.vision_provider,
+                        model=config.vision_model,
+                    ),
+                )
+
+            context = VisionFallbackContext(
+                config,
+                cache,
+                build_model,
+                interrupted=lambda: bool(
+                    getattr(self.state, f"interrupted", False)
+                ),
+            )
+            self._vision_context = context
+            self._vision_turn = turn
+        candidates = getattr(self.model, f"_models", [self.model])
+        for candidate in candidates:
+            if isinstance(candidate, VisionFallbackChatModel):
+                candidate.vision_context = context
+        primary = candidates[0]
+        if isinstance(primary, VisionFallbackChatModel):
+            if primary.rejects_images():
+                await context.prepare(self.state.context)
 
     async def _prepare_model_input(self) -> dict[str, Any]:
         """Freeze local images before they enter a provider request."""

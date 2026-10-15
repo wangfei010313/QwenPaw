@@ -205,6 +205,10 @@ class FallbackChatModel(ChatModelBase):
         name = getattr(self._active_model, "model", None)
         return str(key or name or self.model)
 
+    async def count_tokens(self, messages: list, tools: Any) -> int:
+        """Count using the primary model's request-time image projection."""
+        return await self._models[0].count_tokens(messages, tools)
+
     async def __call__(
         self,
         *args: Any,

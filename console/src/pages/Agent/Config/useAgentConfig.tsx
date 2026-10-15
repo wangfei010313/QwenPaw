@@ -86,6 +86,14 @@ export function useAgentConfig(
         memory_manager_backend: memoryBackend,
         memory_backend_configs: config.memory_backend_configs || {},
         reme_light_memory_config: config.reme_light_memory_config,
+        multimodal_fallback: config.multimodal_fallback ?? {
+          enabled: false,
+          vision_provider: "",
+          vision_model: "",
+          max_images_per_turn: 5,
+          description_max_tokens: 1024,
+          timeout_seconds: 60,
+        },
         auto_title_config: config.auto_title_config ?? {
           enabled: true,
           timeout_seconds: 30.0,
@@ -177,6 +185,10 @@ export function useAgentConfig(
               original.memory_backend_configs,
               formValues.memory_backend_configs,
             ) || {},
+          multimodal_fallback: deepMergeConfig(
+            original.multimodal_fallback,
+            formValues.multimodal_fallback,
+          ),
           auto_title_config: deepMergeConfig(
             original.auto_title_config,
             formValues.auto_title_config,

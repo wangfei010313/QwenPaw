@@ -161,6 +161,36 @@ describe("useAgentConfig", () => {
     mockGetFieldsValue.mockReturnValue(makeConfig());
   });
 
+  it("loads and preserves collapsed image description settings", async () => {
+    const fallback = {
+      enabled: true,
+      vision_provider: "local",
+      vision_model: "vision",
+      max_images_per_turn: 3,
+      description_max_tokens: 512,
+      timeout_seconds: 30,
+    };
+    apiMocks.getAgentRunningConfig.mockResolvedValue(
+      makeConfig({ multimodal_fallback: fallback }),
+    );
+    const view = renderConfigHook();
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(mockSetFieldsValue).toHaveBeenCalledWith(
+      expect.objectContaining({ multimodal_fallback: fallback }),
+    );
+    mockGetFieldsValue.mockReturnValue({
+      multimodal_fallback: { max_images_per_turn: 4 },
+    });
+    await act(async () => {
+      await view.result.current.handleSave();
+    });
+    expect(apiMocks.updateAgentRunningConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        multimodal_fallback: { ...fallback, max_images_per_turn: 4 },
+      }),
+    );
+  });
+
   it("initial loading=true, then loading=false after fetchConfig", async () => {
     let result: ReturnType<typeof renderConfigHook>;
     act(() => {

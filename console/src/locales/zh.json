@@ -1,4 +1,17 @@
 {
+  "visionFallback": {
+    "title": "图片转文字",
+    "description": "主模型不支持图片时，自动将图片发送给指定视觉模型生成描述，再由主模型回答。可能产生额外费用；原图仍会保留。",
+    "enabled": "启用图片转文字",
+    "provider": "视觉提供商",
+    "model": "视觉模型",
+    "images": "每轮最多解析图片数",
+    "tokens": "每张描述的 token 上限",
+    "timeout": "每轮总等待预算（秒）",
+    "required": "启用后请填写有效配置",
+    "loadFailed": "无法加载视觉模型列表，请检查连接后重新打开设置。",
+    "uploadNotice": "图片将由已配置的视觉模型解析，再交给当前主模型回答。"
+  },
   "terminal": {
     "authRequired": "使用终端前，请设置 QWENPAW_AUTH_ENABLED=true，重启服务并登录。",
     "dependencyMissing": "终端不可用：请在后端 Python 环境安装 pywinpty 并重启服务。",

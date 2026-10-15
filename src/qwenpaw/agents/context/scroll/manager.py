@@ -47,6 +47,7 @@ from .history import HistoryStore
 from .serialize import msg_to_entries
 from ..types import ContextWindowUnfitError
 from ...utils.tool_message_utils import _remove_unpaired_tool_messages
+from ...utils.vision_description import VISION_DESCRIPTION_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class ScrollContextManager:
             str,
             int,
         ] = {}  # msg.id -> #non-result blocks persisted
+        self._vision_description_revisions: dict[str, str] = {}
         self._leaf_by_id: dict[str, Leaf] = {}  # msg.id -> its index leaf
         self._index = EvictionIndex(session_id=session_id, agent_id=agent_id)
         self._continuation_summary: ContinuationSummary | None = None
@@ -1826,6 +1828,11 @@ class ScrollContextManager:
                 continue
             anon_pos = 0  # stable index for results lacking a tool_call_id
             for entry in msg_to_entries(msg):
+                description_revision = json.dumps(
+                    entry.metadata.get(VISION_DESCRIPTION_KEY, {}),
+                    sort_keys=True,
+                )
+                revision_key = mid
                 if entry.kind == "tool_result":
                     # Key on the call id, else this result's position in the
                     # msg — a fixed function of (msg.id, block order), so it
@@ -1833,7 +1840,28 @@ class ScrollContextManager:
                     # set's size.
                     tcid = entry.tool_call_id or f"{mid}#anon{anon_pos}"
                     anon_pos += 1
+                    revision_key = f"tool:{tcid}"
                     if tcid in self._persisted_tcids:
+                        if description_revision != f"{{}}" and (
+                            self._vision_description_revisions.get(
+                                revision_key,
+                            )
+                            != description_revision
+                        ):
+                            self._history.update_entry(
+                                self._seq_by_tcid[tcid],
+                                content=entry.content,
+                                headline=entry.headline,
+                                blocks=entry.blocks,
+                                tool_call_id=entry.tool_call_id,
+                                name=entry.name,
+                                tool_state=entry.tool_state,
+                                tool_input=entry.tool_input,
+                                metadata=entry.metadata,
+                            )
+                            self._vision_description_revisions[
+                                revision_key
+                            ] = description_revision
                         continue
                     seq = self._history.append(
                         session_id=self._session_id,
@@ -1858,6 +1886,11 @@ class ScrollContextManager:
                         if (
                             nblk <= self._model_turn_nblk.get(mid, 0)
                             and not new_headline
+                            and (
+                                description_revision == f"{{}}"
+                                or self._vision_description_revisions.get(mid)
+                                == description_revision
+                            )
                         ):
                             continue
                         self._history.update_entry(
@@ -1872,6 +1905,9 @@ class ScrollContextManager:
                             metadata=entry.metadata,
                         )
                         self._model_turn_nblk[mid] = nblk
+                        self._vision_description_revisions[
+                            mid
+                        ] = description_revision
                         if new_headline:
                             self._leaf_by_id[mid] = Leaf(
                                 seq=prev_seq,
@@ -1893,6 +1929,10 @@ class ScrollContextManager:
                             seq=seq,
                             headline=entry.headline,
                         )
+                if description_revision != f"{{}}":
+                    self._vision_description_revisions[
+                        revision_key
+                    ] = description_revision
                 # Track the msg's seq span (it grows as results are appended)
                 # so eviction recovers the whole turn by range.
                 lo, hi = self._seq_by_id.get(mid, (seq, seq))
@@ -2118,6 +2158,12 @@ class ScrollContextManager:
             for key, value in self._seq_by_id.items()
             if key in live_msg_ids
         }
+        self._vision_description_revisions = {
+            key: value
+            for key, value in self._vision_description_revisions.items()
+            if key in live_msg_ids
+            or key.removeprefix(f"tool:") in live_tool_ids
+        }
         self._model_turn_seq = {
             key: value
             for key, value in self._model_turn_seq.items()
@@ -2205,6 +2251,9 @@ class ScrollContextManager:
             },
             "model_turn_seq": dict(self._model_turn_seq),
             "model_turn_nblk": dict(self._model_turn_nblk),
+            f"vision_description_revisions": dict(
+                self._vision_description_revisions,
+            ),
             "leaf_by_id": {
                 k: [lf.seq, lf.headline] for k, lf in self._leaf_by_id.items()
             },
@@ -2241,6 +2290,9 @@ class ScrollContextManager:
         }
         self._model_turn_seq = dict(data.get("model_turn_seq", {}))
         self._model_turn_nblk = dict(data.get("model_turn_nblk", {}))
+        self._vision_description_revisions = dict(
+            data.get(f"vision_description_revisions", {}),
+        )
         self._leaf_by_id = {
             k: Leaf(seq=seq, headline=headline)
             for k, (seq, headline) in data.get("leaf_by_id", {}).items()

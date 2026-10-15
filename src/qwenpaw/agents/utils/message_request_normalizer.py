@@ -16,6 +16,7 @@ from agentscope.message import Msg, TextBlock
 
 from ...constant import MEDIA_UNSUPPORTED_PLACEHOLDER
 from .tool_message_utils import _sanitize_tool_messages
+from .vision_description import project_image_descriptions
 
 # Block types stripped from copied messages during request-time
 # normalization when the target model cannot accept them.  ``file`` is
@@ -330,6 +331,7 @@ def normalize_messages_for_model_request(
     supports_multimodal: bool,
     target_family: str = "openai",
     strip_audio: bool = False,
+    supports_image: bool | None = None,
 ) -> list[Msg]:
     """Return a normalized copy for provider request formatting.
 
@@ -342,6 +344,12 @@ def normalize_messages_for_model_request(
         strip_audio: Whether to remove only audio blocks from the request copy.
     """
     normalized = _clone_messages(msgs)
+    project_image_descriptions(
+        normalized,
+        supports_image=(
+            supports_multimodal if supports_image is None else supports_image
+        ),
+    )
     # Sanitize first: _repair_empty_tool_inputs needs raw_input to fix
     # empty input fields.  _clean_provider_specific_fields runs after so
     # that raw_input (and other provider artefacts) are stripped only once

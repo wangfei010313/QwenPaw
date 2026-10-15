@@ -1,4 +1,17 @@
 {
+  "visionFallback": {
+    "title": "Image descriptions",
+    "description": "When the main model cannot accept images, send them to the selected vision model for descriptions, then let the main model answer. Additional charges may apply. Original images are retained.",
+    "enabled": "Enable image descriptions",
+    "provider": "Vision provider",
+    "model": "Vision model",
+    "images": "Maximum images per reply",
+    "tokens": "Description token limit per image",
+    "timeout": "Total wait budget per reply (seconds)",
+    "required": "Enter a valid configuration when enabled",
+    "loadFailed": "Could not load vision models. Check the connection and reopen settings.",
+    "uploadNotice": "The configured vision model will describe this image for the current main model."
+  },
   "terminal": {
     "authRequired": "To use the terminal, set QWENPAW_AUTH_ENABLED=true, restart the service, and sign in.",
     "dependencyMissing": "Terminal unavailable: install pywinpty in the backend Python environment and restart the service.",

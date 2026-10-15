@@ -203,12 +203,12 @@ class TestCheckMultimodalSupport:
         assert _check_multimodal_support("image") is True
 
     @patch("qwenpaw.agents.prompt._get_active_model_info", create=True)
-    def test_supports_multimodal_true(self, mock_info):
+    def test_explicit_image_rejection_overrides_multimodal(self, mock_info):
         model_info = MagicMock()
         model_info.supports_image = False
         model_info.supports_multimodal = True
         mock_info.return_value = (model_info, None)
-        assert _check_multimodal_support("image") is True
+        assert _check_multimodal_support(f"image") is False
 
     @patch("qwenpaw.agents.prompt._get_active_model_info", create=True)
     def test_video_requires_explicit_support(self, mock_info):

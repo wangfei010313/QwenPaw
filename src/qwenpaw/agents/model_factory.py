@@ -45,6 +45,11 @@ from agentscope.formatter import OpenAIResponseFormatter
 from .utils.message_request_normalizer import (
     normalize_messages_for_model_request,
 )
+from .utils.vision_fallback import (
+    VisionFallbackChatModel,
+    image_support,
+    is_image_capability_error,
+)
 from ..exceptions import ProviderError, ModelFormatterError
 from ..providers import ProviderManager
 from ..providers.provider import ModelInfo, agent_thinking_level
@@ -617,6 +622,11 @@ def _normalize_messages_for_formatter(
         supports_multimodal=supports_multimodal,
         target_family=target_family,
         strip_audio=strip_audio,
+        supports_image=getattr(
+            formatter_instance,
+            f"_qwenpaw_supports_image",
+            None,
+        ),
     )
 
     return (
@@ -2078,6 +2088,7 @@ class _AgentModelSettings:
     fallback_free_only: bool = False
     thinking_level: Any = "inherit"
     thinking_budget: int | None = None
+    vision_fallback_enabled: bool = False
     compact_threshold: Optional[float] = None
 
 
@@ -2116,6 +2127,13 @@ def _load_agent_model_settings(
                 fallback_policy.target_scope == "free_only"
             )
         running = agent_config.running
+        settings.vision_fallback_enabled = bool(
+            getattr(
+                getattr(running, f"multimodal_fallback", None),
+                f"enabled",
+                False,
+            ),
+        )
         settings.retry_config = RetryConfig(
             enabled=running.llm_retry_enabled,
             max_retries=running.llm_max_retries,
@@ -2150,6 +2168,7 @@ def _apply_model_fallbacks(
     retry_config: RetryConfig | None,
     rate_limit_config: RateLimitConfig | None,
     has_model_override: bool,
+    vision_fallback_enabled: bool = False,
 ) -> ChatModelBase:
     """Build an ordered fallback chain around the primary model."""
     if not fallback_enabled or has_model_override or not fallback_slots:
@@ -2215,13 +2234,18 @@ def _apply_model_fallbacks(
             fallback_model,
             compact_threshold=compact_threshold,
         )
-        fallback_models.append(
-            RetryChatModel(
-                recorded_model,
-                retry_config=retry_config,
-                rate_limit_config=rate_limit_config,
-            ),
+        candidate = RetryChatModel(
+            recorded_model,
+            retry_config=retry_config,
+            rate_limit_config=rate_limit_config,
         )
+        if vision_fallback_enabled:
+            candidate = VisionFallbackChatModel(
+                candidate,
+                supports_image=image_support(fallback_info),
+                capability_error=is_image_capability_error,
+            )
+        fallback_models.append(candidate)
         seen_slots.add(fallback_key)
 
     if len(fallback_models) > 1:
@@ -2254,6 +2278,12 @@ def _create_hub_model_and_formatter(settings, model_slot, *, explicit):
     )
     info = provider.get_model_info(selected.model)
     wrapped.display_name = info.name if info else None
+    if settings.vision_fallback_enabled:
+        wrapped = VisionFallbackChatModel(
+            wrapped,
+            supports_image=image_support(info),
+            capability_error=is_image_capability_error,
+        )
     return wrapped, formatter
 
 
@@ -2361,6 +2391,15 @@ def create_model_and_formatter(
         rate_limit_config=settings.rate_limit_config,
     )
 
+    if settings.vision_fallback_enabled:
+        wrapped_model = VisionFallbackChatModel(
+            wrapped_model,
+            supports_image=image_support(
+                provider.get_model_info(selected_model_id),
+            ),
+            capability_error=is_image_capability_error,
+        )
+
     wrapped_model = _apply_model_fallbacks(
         wrapped_model,
         provider_id=provider_id,
@@ -2373,6 +2412,7 @@ def create_model_and_formatter(
         retry_config=settings.retry_config,
         rate_limit_config=settings.rate_limit_config,
         has_model_override=slot is not None,
+        vision_fallback_enabled=settings.vision_fallback_enabled,
     )
 
     info = provider.get_model_info(selected_model_id)
@@ -2478,6 +2518,11 @@ def _install_model_formatter(
             or bool(model_info.supports_image or model_info.supports_video)
             or model_info.supports_multimodal is not False
         ),
+    )
+    object.__setattr__(
+        formatter,
+        f"_qwenpaw_supports_image",
+        image_support(model_info),
     )
     model.formatter = formatter
     return formatter

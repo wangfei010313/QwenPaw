@@ -12,6 +12,7 @@ from agentscope.message import Msg
 from ....constant import QWENPAW_MESSAGE_TAG_KEY
 from ....utils.tool_call_extra import TOOL_CALL_EXTRAS_METADATA_KEY
 from ..types import LogEntry
+from ...utils.vision_description import VISION_DESCRIPTION_KEY
 from ...utils.tool_message_utils import (
     dump_block as _dump,
     flatten_output,
@@ -239,6 +240,11 @@ def msg_to_entries(msg: Msg) -> list[LogEntry]:
         persisted_metadata: dict[str, Any] = {}
         msg_meta = getattr(msg, "metadata", None)
         if isinstance(msg_meta, dict):
+            descriptions = msg_meta.get(VISION_DESCRIPTION_KEY)
+            if isinstance(descriptions, dict):
+                persisted_metadata[VISION_DESCRIPTION_KEY] = deepcopy(
+                    descriptions,
+                )
             tag = msg_meta.get(QWENPAW_MESSAGE_TAG_KEY)
             if tag:
                 persisted_metadata[QWENPAW_MESSAGE_TAG_KEY] = str(tag)

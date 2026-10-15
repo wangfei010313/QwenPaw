@@ -7,7 +7,10 @@ import styles from "./RuntimeWorkbench.module.less";
 const groups = [
   { id: "workspace", keys: ["reactAgent"] },
   { id: "execution", keys: ["agentLoop", "toolExecutionLevel"] },
-  { id: "recovery", keys: ["llmRetry", "llmRateLimiter"] },
+  {
+    id: "recovery",
+    keys: ["llmRetry", "llmRateLimiter", "multimodalFallback"],
+  },
   { id: "context", keys: ["lightContext"] },
   { id: "memory", keys: ["remeLightMemory", "embeddingModel"] },
 ];
